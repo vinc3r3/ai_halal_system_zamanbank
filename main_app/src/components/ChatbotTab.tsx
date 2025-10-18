@@ -1,9 +1,10 @@
-﻿import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Mic,
   Send,
   Paperclip,
+  X,
   Menu,
   Sparkles,
   FileText,
@@ -13,12 +14,16 @@ import {
   ChevronLeft,
   Loader2,
   Volume2,
+  Tag,
+  MessageCircle,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
-import { enrichedTransactions, formatCurrency } from '../data/financialData';
+import { useTheme } from '../contexts/ThemeContext';
+import { enrichedTransactions, formatCurrency, getCategoryColor } from '../data/financialData';
 
+// ---------- Types ----------
 interface ChatOption {
   id: string;
   title: string;
@@ -26,80 +31,57 @@ interface ChatOption {
   icon: React.ReactNode;
   badge?: string;
 }
+interface Message {
+  id: string;
+  text: string;
+  sender: 'user' | 'ai';
+  timestamp: string;
+  attachment?: { type: 'image' | 'audio' | 'file'; url: string };
+}
 
+// ---------- Style options ----------
 const chatOptions: ChatOption[] = [
-  {
-    id: 'financial-diary',
-    title: 'Финансовый дневник',
-    description: 'Отслеживайте расходы и доходы',
-    icon: <Wallet className="w-6 h-6" />,
-  },
-  {
-    id: 'zaman-ai',
-    title: 'Zaman AI',
-    description:
-      'Как взять кредит, копить и тратить, не нарушая законов Шариата',
-    icon: <Sparkles className="w-6 h-6" />,
-    badge: 'Халяль',
-  },
-  {
-    id: 'text-work',
-    title: 'Работа с текстом',
-    description: 'Пишет за вас, подсказывает идеи',
-    icon: <FileText className="w-6 h-6" />,
-    badge: 'GPT-4o бесплатно',
-  },
-  {
-    id: 'ai-search',
-    title: 'ИИ-поисковик',
-    description: 'Ищет ответы на любые вопросы',
-    icon: <Search className="w-6 h-6" />,
-  },
-  {
-    id: 'file-work',
-    title: 'Работа с файлами',
-    description: 'Ищет важное в файлах и объясняет простыми словами',
-    icon: <File className="w-6 h-6" />,
-  },
+  { id: 'financial-diary', title: 'Финансовый дневник', description: 'Отслеживайте расходы и доходы', icon: <Wallet className="w-6 h-6" /> },
+  { id: 'zaman-ai', title: 'Zaman AI', description: 'Как взять кредит, копить и тратить, не нарушая законов Шариата', icon: <Sparkles className="w-6 h-6" />, badge: 'Халяль' },
+  { id: 'text-work', title: 'Работа с текстом', description: 'Пишет за вас, подсказывает идеи', icon: <FileText className="w-6 h-6" />, badge: 'GPT-4o бесплатно' },
+  { id: 'ai-search', title: 'ИИ-поисковик', description: 'Ищет ответы на любые вопросы', icon: <Search className="w-6 h-6" /> },
+  { id: 'file-work', title: 'Работа с файлами', description: 'Ищет важное в файлах и объясняет простыми словами', icon: <File className="w-6 h-6" /> },
 ];
 
-// --- ENV / helpers ---
+// ---------- ENV / helpers ----------
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ??
-  'http://localhost:8000';
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'http://localhost:8000';
 
 const TIMESTAMP_LOCALE: Intl.LocalesArgument = 'ru-RU';
 const formatTimestamp = () =>
-  new Date().toLocaleTimeString(TIMESTAMP_LOCALE, {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  new Date().toLocaleTimeString(TIMESTAMP_LOCALE, { hour: '2-digit', minute: '2-digit' });
 
-const detectLanguage = (text: string): 'ru' | 'en' =>
-  /[\u0400-\u04FF]/.test(text) ? 'ru' : 'en';
+const detectLanguage = (text: string): 'ru' | 'en' => (/[\u0400-\u04FF]/.test(text) ? 'ru' : 'en');
 
-// --- Fixed Russian strings (previously mojibake) ---
-const GENERAL_ERROR = '?? ??????? ????????? ? Zaman AI. ????????? ??????? ?????.';
-const TRANSCRIPTION_ERROR =
-  'Не удалось распознать голосовое сообщение. Попробуйте ещё раз.';
-const MICROPHONE_ERROR =
-  'Нет доступа к микрофону. Проверьте разрешения и повторите попытку.';
-const AUDIO_ERROR =
-  'Не удалось воспроизвести аудиоответ. Попробуйте ещё раз.';
-const VOICE_UNAVAILABLE_ERROR =
-  'Голосовые функции недоступны для текущей конфигурации.';
+const isHexColorLight = (hex: string): boolean => {
+  const sanitized = hex.replace('#', '');
+  if (sanitized.length !== 6) return false;
+  const r = parseInt(sanitized.slice(0, 2), 16);
+  const g = parseInt(sanitized.slice(2, 4), 16);
+  const b = parseInt(sanitized.slice(4, 6), 16);
+  if ([r, g, b].some((value) => Number.isNaN(value))) return false;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6;
+};
 
+// ---------- Fixed strings ----------
+const GENERAL_ERROR = 'Не удалось связаться с Zaman AI. Повторите попытку позже.';
+const TRANSCRIPTION_ERROR = 'Не удалось распознать голосовое сообщение. Попробуйте ещё раз.';
+const MICROPHONE_ERROR = 'Нет доступа к микрофону. Проверьте разрешения и повторите попытку.';
+const AUDIO_ERROR = 'Не удалось воспроизвести аудиоответ. Попробуйте ещё раз.';
+const VOICE_UNAVAILABLE_ERROR = 'Голосовые функции недоступны для текущей конфигурации.';
+
+// ---------- Utilities ----------
 const extractChatReply = (payload: unknown): string | null => {
   if (!payload || typeof payload !== 'object') return null;
   const data = payload as Record<string, unknown>;
   const candidates = [data.response, data.reply, data.message];
-
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string') {
-      const trimmed = candidate.trim();
-      if (trimmed) return trimmed;
-    }
-  }
+  for (const c of candidates) if (typeof c === 'string' && c.trim()) return c.trim();
   return null;
 };
 
@@ -111,81 +93,42 @@ const decodeBase64Audio = (base64Audio: string): Uint8Array => {
 };
 
 const fetchAudioResponse = async (text: string, language: string): Promise<Blob> => {
-  // Try both endpoints for compatibility
   const endpoints = [`${API_BASE_URL}/tts`, `${API_BASE_URL}/speech`];
   const payload = JSON.stringify({ text, language });
   let lastError: Error | null = null;
 
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) continue;
+      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload });
+      if (!res.ok) {
+        if (res.status === 404) continue;
         let detail: string | undefined;
         try {
-          const errorBody = await response.json();
-          detail =
-            typeof errorBody?.detail === 'string' ? errorBody.detail : undefined;
-        } catch {
-          // ignore
-        }
+          const errBody = await res.json();
+          if (typeof errBody?.detail === 'string') detail = errBody.detail;
+        } catch {}
         throw new Error(detail ?? 'Zaman AI сейчас недоступен. Попробуйте позже.');
       }
-
-      const contentType = response.headers.get('content-type') ?? '';
-      if (contentType.includes('application/json')) {
-        const data = await response.json();
-
-        // Accept `audio_base64` or `audioBase64` or `audio`
-        const audioBase64 =
-          (typeof (data as any)?.audio_base64 === 'string' && (data as any).audio_base64) ||
-          (typeof (data as any)?.audioBase64 === 'string' && (data as any).audioBase64) ||
-          (typeof (data as any)?.audio === 'string' && (data as any).audio);
-
+      const ct = res.headers.get('content-type') ?? '';
+      if (ct.includes('application/json')) {
+        const data: any = await res.json();
+        const audioBase64 = data.audio_base64 || data.audioBase64 || data.audio;
         if (!audioBase64) {
-          const detail =
-            (typeof (data as any)?.detail === 'string' && (data as any).detail) ||
-            (typeof (data as any)?.message === 'string' && (data as any).message);
+          const detail = data.detail || data.message;
           throw new Error(detail ?? 'Получен неожиданный аудиоответ от Zaman AI.');
         }
-
-        const mimeType =
-          (typeof (data as any)?.mime_type === 'string' && (data as any).mime_type) ||
-          (typeof (data as any)?.mimeType === 'string' && (data as any).mimeType) ||
-          'audio/mpeg';
-
-        const audioBytes = decodeBase64Audio(audioBase64);
-        return new Blob([audioBytes], { type: mimeType });
+        const mimeType = data.mime_type || data.mimeType || 'audio/mpeg';
+        return new Blob([decodeBase64Audio(audioBase64)], { type: mimeType });
       }
-
-      // If backend streams raw bytes
-      return await response.blob();
+      return await res.blob();
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(GENERAL_ERROR);
     }
   }
-
   throw lastError ?? new Error(GENERAL_ERROR);
 };
 
-interface Message {
-  id: string;
-  text: string;
-  sender: 'user' | 'ai';
-  timestamp: string;
-  attachment?: {
-    type: 'image' | 'audio' | 'file';
-    url: string;
-  };
-}
-
-const diaryTransactions = enrichedTransactions;
-
+// ---------- Component ----------
 export function ChatbotTab() {
   const [selectedChat, setSelectedChat] = useState<string | null>(null);
   const [message, setMessage] = useState('');
@@ -194,7 +137,7 @@ export function ChatbotTab() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-  const [expandedTransaction, setExpandedTransaction] = useState<string | null>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -205,26 +148,19 @@ export function ChatbotTab() {
   const audioSourceRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
 
+  const { theme } = useTheme(); // (kept for your context API; not required below but harmless)
+
+  // cleanup
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
-
-      if (
-        mediaRecorderRef.current &&
-        mediaRecorderRef.current.state !== 'inactive'
-      ) {
-        try {
-          mediaRecorderRef.current.stop();
-        } catch {
-          // ignore
-        }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop(); } catch {}
       }
-
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
       }
-
       if (audioSourceRef.current) {
         URL.revokeObjectURL(audioSourceRef.current);
         audioSourceRef.current = null;
@@ -232,78 +168,74 @@ export function ChatbotTab() {
     };
   }, []);
 
-  useEffect(() => {
-    setError(null);
-  }, [selectedChat]);
+  // reset errors when switching chat
+  useEffect(() => { setError(null); }, [selectedChat]);
 
+  // -------- chat submit --------
   const mapHistory = (history: Message[]) =>
-    history.map((m) => ({
-      role: m.sender === 'user' ? 'user' : 'assistant',
-      content: m.text,
-    }));
+    history.map((m) => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text }));
 
   const submitMessage = async (content: string) => {
     const trimmed = content.trim();
     if (!trimmed || isProcessing) return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: trimmed,
-      sender: 'user',
-      timestamp: formatTimestamp(),
-    };
-
+    const userMessage: Message = { id: Date.now().toString(), text: trimmed, sender: 'user', timestamp: formatTimestamp() };
     setMessages((prev) => [...prev, userMessage]);
     setError(null);
     setIsProcessing(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/chat`, {
+      console.log('Sending message to API:', { message: trimmed, history: mapHistory(messages) });
+      console.log('API URL:', `${API_BASE_URL}/chat`);
+      
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: trimmed,
-          history: mapHistory(messages),
-        }),
+        body: JSON.stringify({ message: trimmed, history: mapHistory(messages) }),
       });
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error(VOICE_UNAVAILABLE_ERROR);
-        }
+      console.log('API Response status:', res.status);
+      console.log('API Response headers:', res.headers);
+
+      if (!res.ok) {
+        if (res.status === 404) throw new Error(VOICE_UNAVAILABLE_ERROR);
         let detail = 'Zaman AI сейчас недоступен. Попробуйте позже.';
         try {
-          const errorBody = await response.json();
-          if (typeof errorBody?.detail === 'string') detail = errorBody.detail;
-        } catch {
-          // ignore
+          const body = await res.json();
+          console.log('Error response body:', body);
+          if (typeof body?.detail === 'string') detail = body.detail;
+        } catch (parseErr) {
+          console.log('Failed to parse error response:', parseErr);
         }
         throw new Error(detail);
       }
 
-      const data = await response.json();
+      const data = await res.json();
+      console.log('API Response data:', data);
       const aiText = extractChatReply(data);
-      if (!aiText) throw new Error('Неожиданный ответ от Zaman AI.');
-
-      const aiMessage: Message = {
-        id: `${Date.now()}-ai`,
-        text: aiText,
-        sender: 'ai',
-        timestamp: formatTimestamp(),
-      };
-
-      if (isMountedRef.current) {
-        setMessages((prev) => [...prev, aiMessage]);
+      if (!aiText) {
+        console.log('No AI text extracted from response:', data);
+        throw new Error('Неожиданный ответ от Zaman AI.');
       }
+      const aiMessage: Message = { id: `${Date.now()}-ai`, text: aiText, sender: 'ai', timestamp: formatTimestamp() };
+      if (isMountedRef.current) setMessages((prev) => [...prev, aiMessage]);
     } catch (err) {
-      console.error(err);
-      if (isMountedRef.current) {
-        setError(err instanceof Error ? err.message : GENERAL_ERROR);
+      console.error('Error in submitMessage:', err);
+      
+      // Provide a fallback response when API is not available
+      if (err instanceof Error && (err.message.includes('fetch') || err.message.includes('Failed to fetch'))) {
+        const fallbackMessage: Message = { 
+          id: `${Date.now()}-ai-fallback`, 
+          text: 'Извините, Zaman AI временно недоступен. Пожалуйста, попробуйте позже или обратитесь в службу поддержки.', 
+          sender: 'ai', 
+          timestamp: formatTimestamp() 
+        };
+        if (isMountedRef.current) setMessages((prev) => [...prev, fallbackMessage]);
+      } else {
+        if (isMountedRef.current) setError(err instanceof Error ? err.message : GENERAL_ERROR);
       }
     } finally {
-      if (isMountedRef.current) {
-        setIsProcessing(false);
-      }
+      if (isMountedRef.current) setIsProcessing(false);
     }
   };
 
@@ -311,22 +243,44 @@ export function ChatbotTab() {
     const trimmed = message.trim();
     if (!trimmed) return;
     setMessage('');
-    void submitMessage(trimmed);
+    
+    // For financial diary, handle transaction addition locally
+    if (selectedChat === 'financial-diary') {
+      handleFinancialDiaryMessage(trimmed);
+    } else {
+      void submitMessage(trimmed);
+    }
   };
 
+  const handleFinancialDiaryMessage = (content: string) => {
+    // Simple parsing for financial diary entries
+    const amountMatch = content.match(/(\d+(?:\.\d{2})?)\s*₸?/);
+    const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
+    
+    if (amount > 0) {
+      const newTransaction = {
+        id: `manual-${Date.now()}`,
+        text: `Добавлен расход: ${content}`,
+        sender: 'ai' as const,
+        timestamp: formatTimestamp(),
+      };
+      setMessages((prev) => [...prev, newTransaction]);
+    } else {
+      void submitMessage(content);
+    }
+  };
+
+  // -------- attachments --------
   const handleAttachment = () => {
     setError(null);
     fileInputRef.current?.click();
   };
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      // hook your upload/analysis pipeline here
-      console.log('File selected:', file);
-    }
+    if (file) console.log('File selected:', file); // hook your upload pipeline here
   };
 
+  // -------- mic / STT --------
   const stopMediaStream = () => {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -336,7 +290,6 @@ export function ChatbotTab() {
 
   const transcribeAudio = async (audioBlob: Blob) => {
     if (!audioBlob || audioBlob.size === 0) return;
-
     setIsTranscribing(true);
     setError(null);
 
@@ -344,35 +297,22 @@ export function ChatbotTab() {
     formData.append('file', audioBlob, 'voice-message.webm');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/transcribe`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
+      const res = await fetch(`${API_BASE_URL}/transcribe`, { method: 'POST', body: formData });
+      if (!res.ok) {
         let detail = 'Zaman AI сейчас недоступен. Попробуйте позже.';
         try {
-          const errorBody = await response.json();
-          if (typeof errorBody?.detail === 'string') detail = errorBody.detail;
-        } catch {
-          // ignore
-        }
+          const body = await res.json();
+          if (typeof body?.detail === 'string') detail = body.detail;
+        } catch {}
         throw new Error(detail);
       }
-
-      const data = await response.json();
+      const data = await res.json();
       const text = (data?.text ?? '').trim();
-
-      if (text) {
-        void submitMessage(text);
-      } else {
-        setError(TRANSCRIPTION_ERROR);
-      }
+      if (text) void submitMessage(text);
+      else setError(TRANSCRIPTION_ERROR);
     } catch (err) {
       console.error(err);
-      if (isMountedRef.current) {
-        setError(err instanceof Error ? err.message : GENERAL_ERROR);
-      }
+      if (isMountedRef.current) setError(err instanceof Error ? err.message : GENERAL_ERROR);
     } finally {
       if (isMountedRef.current) setIsTranscribing(false);
     }
@@ -383,42 +323,35 @@ export function ChatbotTab() {
       mediaRecorderRef.current?.stop();
       return;
     }
-
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       setError(MICROPHONE_ERROR);
       return;
     }
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      const mimeTypeOptions = [
+      const mimeOptions = [
         'audio/webm;codecs=opus',
         'audio/webm',
         'audio/ogg;codecs=opus',
         'audio/ogg',
       ];
-      const supportedMime =
-        mimeTypeOptions.find((m) => MediaRecorder.isTypeSupported(m)) || '';
-
-      const recorder = new MediaRecorder(stream, supportedMime ? { mimeType: supportedMime } : undefined);
+      const supported = mimeOptions.find((m) => MediaRecorder.isTypeSupported(m));
+      const recorder = new MediaRecorder(stream, supported ? { mimeType: supported } : undefined);
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
-      recorder.addEventListener('dataavailable', (event) => {
-        if (event.data && event.data.size > 0) audioChunksRef.current.push(event.data);
+      recorder.addEventListener('dataavailable', (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
       });
-
       recorder.addEventListener('stop', async () => {
         stopMediaStream();
         setIsRecording(false);
-
         const mimeType = recorder.mimeType || 'audio/webm';
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
         audioChunksRef.current = [];
-
-        await transcribeAudio(audioBlob);
+        await transcribeAudio(blob);
       });
 
       recorder.start();
@@ -431,46 +364,35 @@ export function ChatbotTab() {
     }
   };
 
+  // -------- TTS replay --------
   const handlePlayLastResponse = async () => {
     const lastAssistantMessage = [...messages].reverse().find((m) => m.sender === 'ai');
     if (!lastAssistantMessage || isGeneratingAudio) return;
 
     setIsGeneratingAudio(true);
     setError(null);
-
     try {
       const audioBlob = await fetchAudioResponse(
         lastAssistantMessage.text,
         detectLanguage(lastAssistantMessage.text)
       );
-
-      if (audioSourceRef.current) {
-        URL.revokeObjectURL(audioSourceRef.current);
-      }
-
+      if (audioSourceRef.current) URL.revokeObjectURL(audioSourceRef.current);
       const audioUrl = URL.createObjectURL(audioBlob);
       audioSourceRef.current = audioUrl;
 
       const player = audioPlayerRef.current;
       if (!player) throw new Error('Аудиоэлемент ещё не готов.');
-
       player.src = audioUrl;
-      const playPromise = player.play();
-      if (playPromise !== undefined) await playPromise;
+      await player.play();
     } catch (err) {
       console.error(err);
-      if (isMountedRef.current) {
-        setError(err instanceof Error ? err.message : AUDIO_ERROR);
-      }
+      if (isMountedRef.current) setError(err instanceof Error ? err.message : AUDIO_ERROR);
     } finally {
       if (isMountedRef.current) setIsGeneratingAudio(false);
     }
   };
 
-  const toggleTransactionActions = (transactionId: string) => {
-    setExpandedTransaction((prev) => (prev === transactionId ? null : transactionId));
-  };
-
+  // -------- UI status text --------
   const statusText = (() => {
     if (isTranscribing) return 'Преобразуем запись в текст...';
     if (isProcessing) return 'Zaman AI готовит ответ...';
@@ -478,57 +400,51 @@ export function ChatbotTab() {
     return null;
   })();
 
+  // ---------- Option screen (styled) ----------
   if (!selectedChat) {
     return (
-      <div className="flex h-full flex-col bg-gray-50 dark:bg-gray-900">
-        <div className="border-b border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
+      <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
+        {/* Header */}
+        <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-4">
           <div className="flex items-center justify-between">
-            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">Zaman GPT</h1>
-            <button
-              className="rounded-full p-2 hover:bg-gray-100 dark:hover:bg-gray-700"
-              type="button"
-              aria-label="Открыть меню чата"
-            >
-              <Menu className="h-6 w-6 text-gray-700 dark:text-gray-200" />
+            <h1 className="text-lg dark:text-white">Zaman GPT</h1>
+            <button className="p-2" aria-label="Меню">
+              <Menu className="w-6 h-6 dark:text-white" />
             </button>
           </div>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Выберите раздел, чтобы начать, или откройте Zaman AI для персональной помощи.
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+            Выбери задачу — он справится за секунды
           </p>
         </div>
 
-        <ScrollArea className="flex-1 px-4 pb-4">
-          <div className="space-y-3 py-4">
+        {/* Chat Options */}
+        <ScrollArea className="flex-1 px-4">
+          <div className="py-4 space-y-3">
             {chatOptions.map((option) => (
               <button
                 key={option.id}
-                type="button"
                 onClick={() => {
                   setSelectedChat(option.id);
                   setMessages([]);
-                  setExpandedTransaction(null);
+                  setSelectedTransaction(null);
                 }}
-                className="group w-full rounded-2xl bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2D9A86] focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-800/90 dark:focus-visible:ring-offset-gray-900"
+                className="w-full bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow text-left"
               >
-                <div className="flex items-start gap-4">
-                  <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#EEFE6D] text-[#1F6F63] shadow-inner shadow-black/10">
+                <div className="flex items-start gap-3">
+                  <div className="w-14 h-14 rounded-full bg-[#EEFE6D] flex items-center justify-center flex-shrink-0">
                     {option.icon}
-                  </span>
+                  </div>
                   <div className="flex-1">
-                    <div className="flex items-start justify-between gap-2">
-                      <h2 className="text-base font-semibold text-gray-900 transition-colors dark:text-white dark:group-hover:text-[#EEFE6D] group-hover:text-[#1F6F63]">
-                        {option.title}
-                      </h2>
-                      {option.badge ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-[#2D9A86] px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-white">
-                          <Sparkles className="h-3 w-3" />
-                          {option.badge}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 text-sm text-gray-600 transition-colors dark:text-gray-300 group-hover:text-gray-700 dark:group-hover:text-gray-200">
+                    <h3 className="font-medium dark:text-white">{option.title}</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                       {option.description}
                     </p>
+                    {option.badge && (
+                      <div className="inline-flex items-center gap-1 mt-2 px-2 py-1 bg-[#2D9A86] text-white rounded-full text-xs">
+                        <Sparkles className="w-3 h-3" />
+                        {option.badge}
+                      </div>
+                    )}
                   </div>
                 </div>
               </button>
@@ -539,163 +455,28 @@ export function ChatbotTab() {
     );
   }
 
-  const activeChat = chatOptions.find((o) => o.id === selectedChat);
-  const activeTitle = activeChat?.title ?? 'Диалог';
-  const activeDescription = activeChat?.description ?? 'Общайтесь с Zaman AI.';
-
-  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      handleSend();
-    }
-  };
-
-  const renderTransactionList = () => {
-    if (selectedChat !== 'financial-diary') return null;
-
-    const transactionsToShow = diaryTransactions.slice(0, 8);
-    const accentClasses = [
-      'bg-[#2D9A86]',
-      'bg-[#FFB74D]',
-      'bg-[#4C6EF5]',
-      'bg-[#E57373]',
-      'bg-[#7E57C2]',
-    ];
-    const pickAccent = (seed: string) => {
-      if (!seed) return accentClasses[0];
-      const code = seed.charCodeAt(0);
-      const index = Number.isFinite(code) ? Math.abs(code) % accentClasses.length : 0;
-      return accentClasses[index];
-    };
-
-    if (!transactionsToShow.length) {
-      return (
-        <div className="rounded-2xl bg-white p-6 text-center shadow-sm dark:bg-gray-800">
-          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#EEFE6D]">
-            <Wallet className="h-10 w-10 text-[#1F6F63]" />
-          </div>
-          <p className="text-sm text-gray-600 dark:text-gray-300">
-            Пока нет недавней активности.
-          </p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-4">
-        {transactionsToShow.map((transaction) => {
-          const label = transaction.item?.trim() || 'Покупка';
-          const initial = label.charAt(0).toUpperCase() || 'T';
-          const accentClass =
-            pickAccent(label || transaction.category || transaction.transactionId);
-          const isExpanded = expandedTransaction === transaction.transactionId;
-
-          return (
-            <div
-              key={transaction.transactionId}
-              className="rounded-2xl bg-white p-4 shadow-sm dark:bg-gray-800"
-            >
-              <div className="flex items-start gap-3">
-                <div
-                  className={`flex h-12 w-12 items-center justify-center rounded-full text-white ${accentClass}`}
-                >
-                  <span className="text-lg font-semibold">{initial}</span>
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-gray-900 dark:text-white">
-                        {label}
-                      </p>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Сумма: {formatCurrency(transaction.amount)}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        Категория: {transaction.category ?? 'Без категории'}
-                      </p>
-                    </div>
-                    <div className="text-right text-xs text-gray-500 dark:text-gray-400">
-                      {transaction.date}
-                      <br />
-                      {transaction.time}
-                    </div>
-                  </div>
-                  {isExpanded ? (
-                    <div className="mt-3 space-y-2 text-xs text-gray-600 dark:text-gray-300">
-                      <p>Клиент: {transaction.customerId || '—'}</p>
-                      <p>Чек: {transaction.hasReceipt ? 'Есть' : 'Нет'}</p>
-                      {typeof transaction.quantity === 'number' ? (
-                        <p>Количество: {transaction.quantity}</p>
-                      ) : null}
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          type="button"
-                          className="rounded-full bg-[#2D9A86] px-3 py-1 text-xs font-semibold text-white transition hover:bg-[#268976]"
-                        >
-                          Отметить проверенным
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-full border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
-                        >
-                          Добавить заметку
-                        </button>
-                        {transaction.hasReceipt ? (
-                          <button
-                            type="button"
-                            className="rounded-full border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
-                          >
-                            Открыть чек
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="mt-3 border-t border-gray-100 pt-3 text-right dark:border-gray-700">
-                <button
-                  type="button"
-                  onClick={() => toggleTransactionActions(transaction.transactionId)}
-                  className="text-sm font-medium text-[#2D9A86] transition hover:text-[#268976]"
-                >
-                  {isExpanded ? 'Скрыть быстрые действия' : 'Показать быстрые действия'}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
+  // ---------- Active chat screen (styled + functional) ----------
+  const currentChat = chatOptions.find((o) => o.id === selectedChat);
   const canReplayAudio = messages.some((m) => m.sender === 'ai');
   const disableComposer = isProcessing || isTranscribing;
 
   return (
-    <div className="flex h-full flex-col bg-gray-50 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
+    <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
+      {/* Header */}
+      <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-4 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setSelectedChat(null)}
-            className="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-700"
-            aria-label="Назад к разделам"
-          >
-            <ChevronLeft className="h-6 w-6 text-gray-700 dark:text-gray-200" />
+          <button onClick={() => setSelectedChat(null)} className="p-1" aria-label="Назад">
+            <ChevronLeft className="w-6 h-6 dark:text-white" />
           </button>
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#EEFE6D] text-[#1F6F63]">
-            {activeChat?.icon}
+          <div className="w-10 h-10 rounded-full bg-[#EEFE6D] flex items-center justify-center">
+            {currentChat?.icon}
           </div>
           <div className="flex-1">
-            <h1 className="text-base font-semibold text-gray-900 dark:text-white">
-              {activeTitle}
-            </h1>
-            <p className="text-xs text-gray-600 dark:text-gray-400">
-              {activeDescription}
-            </p>
+            <h1 className="dark:text-white">{currentChat?.title}</h1>
+            <p className="text-xs text-gray-600 dark:text-gray-400">{currentChat?.description}</p>
           </div>
+
+          {/* Replay last AI message (TTS) */}
           <button
             type="button"
             onClick={handlePlayLastResponse}
@@ -717,57 +498,158 @@ export function ChatbotTab() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1 px-4">
-        <div className="space-y-4 py-4">
-          {selectedChat === 'financial-diary' ? (
-            renderTransactionList()
-          ) : messages.length === 0 ? (
-            <div className="py-12 text-center">
-              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#EEFE6D]">
-                {activeChat?.icon}
-              </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Начните диалог: {activeChat?.title}.
-              </p>
-            </div>
-          ) : (
-            messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${
-                    msg.sender === 'user'
-                      ? 'bg-[#2D9A86] text-white'
-                      : 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-gray-100'
-                  }`}
-                >
-                  <p>{msg.text}</p>
-                  {msg.attachment ? (
-                    <div className="mt-2 text-xs opacity-80">
-                      <span className="inline-flex items-center rounded bg-white/20 px-2 py-0.5">
-                        {msg.attachment.type.toUpperCase()} attachment
-                      </span>
+      {/* Messages / Transactions */}
+      <div className="flex-1 overflow-hidden">
+        <ScrollArea className="h-full px-4">
+          <div className="py-4 space-y-4 pb-6">
+            {selectedChat === 'financial-diary' ? (
+              enrichedTransactions.length > 0 ? (
+                enrichedTransactions.slice(0, 8).map((t) => {
+                  const iconLetter = (t.item?.trim()?.charAt(0) || 'T').toUpperCase();
+                  const accentColor = getCategoryColor(t.category);
+                  const isAccentLight = isHexColorLight(accentColor);
+                  const iconTextClass = isAccentLight ? 'text-gray-900' : 'text-white';
+                  const categoryTextClass = isAccentLight ? 'text-gray-900' : 'text-white';
+
+                  const showActionRow = selectedTransaction === t.transactionId;
+                  const hasCategory = Boolean(t.category);
+
+                  return (
+                    <div key={t.transactionId} className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <div
+                          className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
+                          style={{ backgroundColor: accentColor }}
+                        >
+                          <span className={`text-lg ${iconTextClass}`}>{iconLetter}</span>
+                        </div>
+
+                        <div className="flex-1">
+                          <div className="flex justify-between items-start mb-1">
+                            <div>
+                              <div className="font-medium dark:text-white">{t.item || 'Покупка'}</div>
+                              <div className="text-sm text-gray-600 dark:text-gray-400">
+                                Сумма: {formatCurrency(t.amount)}
+                              </div>
+                              {typeof t.balance === 'number' ? (
+                                <div className="text-xs text-gray-500 dark:text-gray-500">
+                                  Доступно: {t.balance.toLocaleString()} ₸
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="text-right text-xs text-gray-400 dark:text-gray-500">
+                              {t.date}
+                              <br />
+                              {t.time}
+                            </div>
+                          </div>
+                          {hasCategory ? (
+                            <div
+                              className={`mt-2 inline-block px-3 py-1 rounded-full text-xs ${categoryTextClass}`}
+                              style={{ backgroundColor: accentColor }}
+                            >
+                              {t.category}
+                            </div>
+                          ) : null}
+
+                          {/* Quick actions row */}
+                          {showActionRow && (
+                            <div className="flex gap-2 mt-3 pt-3 border-t dark:border-gray-700">
+                              <button
+                                className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                onClick={() => fileInputRef.current?.click()}
+                                aria-label="Прикрепить чек"
+                              >
+                                <Camera className="w-5 h-5 text-[#2D9A86]" />
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Прикрепить чек</span>
+                              </button>
+                              <button
+                                className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                aria-label="Выбрать тег"
+                              >
+                                <Tag className="w-5 h-5 text-[#2D9A86]" />
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Выбрать тег</span>
+                              </button>
+                              <button
+                                className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                onClick={() => {
+                                  const hint = `Добавьте комментарий к транзакции ${t.transactionId}: `;
+                                  setMessage((prev) => (prev ? prev : hint));
+                                }}
+                                aria-label="Комментарий"
+                              >
+                                <MessageCircle className="w-5 h-5 text-[#2D9A86]" />
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Комментарий</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Toggle actions CTA */}
+                          {!showActionRow && !hasCategory && (
+                            <button
+                              onClick={() => setSelectedTransaction(t.transactionId)}
+                              className="w-full mt-3 pt-3 border-t dark:border-gray-700 text-center text-sm text-[#2D9A86] hover:text-[#268976]"
+                            >
+                              Добавить категорию
+                            </button>
+                          )}
+                          {showActionRow && (
+                            <button
+                              onClick={() => setSelectedTransaction(null)}
+                              className="w-full mt-3 pt-3 border-t dark:border-gray-700 text-center text-sm text-[#2D9A86] hover:text-[#268976]"
+                            >
+                              Скрыть действия
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  ) : null}
-                  <p
-                    className={`mt-2 text-xs ${
+                  );
+                })
+              ) : (
+                <div className="text-center py-12">
+                  <div className="w-20 h-20 rounded-full bg-[#EEFE6D] mx-auto mb-4 flex items-center justify-center">
+                    <Wallet className="w-10 h-10" />
+                  </div>
+                  <p className="text-gray-600 dark:text-gray-400">Нет транзакций</p>
+                </div>
+              )
+            ) : messages.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="w-20 h-20 rounded-full bg-[#EEFE6D] mx-auto mb-4 flex items-center justify-center">
+                  {currentChat?.icon}
+                </div>
+                <p className="text-gray-600 dark:text-gray-400">Начните диалог с {currentChat?.title}</p>
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 ${
                       msg.sender === 'user'
-                        ? 'text-white/70'
-                        : 'text-gray-500 dark:text-gray-400'
+                        ? 'bg-[#2D9A86] text-white'
+                        : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'
                     }`}
                   >
-                    {msg.sender === 'user' ? 'Вы' : 'Zaman AI'} • {msg.timestamp}
-                  </p>
+                    <p>{msg.text}</p>
+                    <p
+                      className={`text-xs mt-1 ${
+                        msg.sender === 'user' ? 'text-white/70' : 'text-gray-500 dark:text-gray-400'
+                      }`}
+                    >
+                      {msg.timestamp}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))
-          )}
-        </div>
-      </ScrollArea>
+              ))
+            )}
+          </div>
+        </ScrollArea>
+      </div>
 
-      <div className="border-t border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
+      {/* Composer */}
+      <div className="bg-white dark:bg-gray-800 border-t dark:border-gray-700 p-4 flex-shrink-0">
+        {/* status + errors */}
         {error ? (
           <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
             {error}
@@ -783,71 +665,61 @@ export function ChatbotTab() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="audio/*,image/*,.pdf,.doc,.docx"
+            accept="image/*,audio/*,.pdf,.doc,.docx"
             onChange={handleFileChange}
             className="hidden"
           />
+
           <button
-            type="button"
             onClick={handleAttachment}
-            className="rounded-lg p-2 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-700"
-            disabled={disableComposer && !messages.length}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
             aria-label="Прикрепить файл"
-          >
-            <Paperclip className="h-5 w-5 text-gray-600 dark:text-gray-300" />
-          </button>
-          <button
-            type="button"
-            onClick={handleAttachment}
-            className="rounded-lg p-2 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-700"
             disabled={disableComposer && !messages.length}
-            aria-label="Открыть камеру / медиа"
           >
-            <Camera className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+            <Paperclip className="w-5 h-5 text-gray-600 dark:text-gray-400" />
           </button>
+
           <button
-            type="button"
-            onClick={() => void toggleRecording()}
-            className={`rounded-lg p-2 transition ${
-              isRecording
-                ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
-                : 'hover:bg-gray-100 dark:hover:bg-gray-700'
-            }`}
-            disabled={!isRecording && disableComposer}
-            aria-label={isRecording ? 'Остановить запись' : 'Начать запись'}
+            onClick={handleAttachment}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+            aria-label="Открыть камеру / медиа"
+            disabled={disableComposer && !messages.length}
           >
-            {isRecording ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <Mic className="h-5 w-5 text-gray-600 dark:text-gray-300" />
-            )}
+            <Camera className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+          </button>
+
+          <button
+            onClick={() => void toggleRecording()}
+            className={`p-2 rounded-lg transition-colors ${
+              isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400' : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+            }`}
+            aria-label={isRecording ? 'Остановить запись' : 'Начать запись'}
+            disabled={!isRecording && disableComposer}
+          >
+            {isRecording ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mic className="w-5 h-5 text-gray-600 dark:text-gray-400" />}
           </button>
 
           <Input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-            placeholder={
-              selectedChat === 'financial-diary'
-                ? 'Спросите о последних тратах...'
-                : 'Введите сообщение...'
-            }
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder={selectedChat === 'financial-diary' ? 'Добавить расход или прикрепить чек...' : 'Введите сообщение...'}
+            className="flex-1 dark:bg-gray-700 dark:text-white dark:border-gray-600"
             disabled={disableComposer}
-            className="flex-1 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
           />
 
           <Button
-            type="button"
             onClick={handleSend}
-            disabled={disableComposer || !message.trim()}
             className="bg-[#2D9A86] hover:bg-[#268976]"
+            disabled={disableComposer || !message.trim()}
             aria-label="Отправить сообщение"
           >
-            {isProcessing ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <Send className="h-5 w-5" />
-            )}
+            {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
           </Button>
         </div>
       </div>
