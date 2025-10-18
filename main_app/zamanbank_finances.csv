@@ -1,0 +1,31 @@
+﻿transaction_id,category,amount_money,item,pcs,category_ru
+887763b0-29bd-45d1-94b5-12c69c9ccd9f,Clothing,88184.5,T-Shirt,3,Одежда
+9e8b60f1-967b-4558-8c67-26b61cf36d17,Utilities,59631.35,Internet Bill,1,ЖКХ
+81eafcde-bf59-4444-97cd-d4490f16ee6c,Clothing,28488.16,Jacket,4,Одежда
+d5a78d5c-774b-4b5c-8e55-9a6625fbcfd6,Utilities,66207.28,Water Bill,3,ЖКХ
+68b6bd85-71ab-4e06-a482-7fb5d811a02f,Restaurant,28831.87,Pasta,3,Еда
+257079a9-756b-4183-bf60-77d6ec20c3ec,Electronics,73050.39,Keyboard,3,Все для дома
+cb938e10-7b71-4597-9233-6a8998f3b9a3,Healthcare,6573.68,Doctor Visit,2,Здоровье
+6d543d4f-a696-4114-b414-961a2ac0ddd8,Transport,8571.18,Metro Pass,5,Транспорт
+76c3e777-2cbb-4ff7-91d2-f25057493a9e,Utilities,82156.35,Electricity Bill,5,ЖКХ
+ce44b0a6-52df-413b-8a83-27ac0cfa786a,Transport,99866.49,Fuel,1,Транспорт
+651c6d52-ed08-44e1-a06c-9cacf3f2bfc8,Clothing,72257.54,Hat,1,Одежда
+5d969180-fd6f-4183-8f2e-326e3f3f3557,Entertainment,45096.94,Book,2,Развлечения
+8c32d0e7-d693-4fad-95e6-775545b7ecfc,Clothing,28257.65,Jeans,3,Одежда
+09697916-9f7b-4a53-a7fc-14a80043fccc,Electronics,98520.31,Monitor,1,Все для дома
+3c5e255d-7eed-462f-bddd-5349f15c1837,Entertainment,3618.49,Game,5,Развлечения
+83dc4e0d-6802-4ae4-b845-6f4a2d1b9841,Electronics,98675.25,Keyboard,4,Все для дома
+d1f5e28d-4701-41d7-99b2-05b33534bf8c,Restaurant,45766.99,Burger,1,Еда
+e0571b1d-01a1-40e9-b8b4-213143c1b477,Groceries,10234.39,Fruits,1,Продукты
+c0d2d7a5-5b85-4c37-9ba6-8cc482943c71,Transport,43336.89,Metro Pass,4,Транспорт
+231fc0ed-64dd-44ac-9c94-c1f24526181e,Entertainment,48449.09,Concert Ticket,3,Развлечения
+b739d703-249a-4e02-87f3-96f330f22b13,Groceries,75608.95,Milk,5,Продукты
+39bd2f74-5053-4148-8902-bd0d0f55fd8e,Clothing,20082.98,Sneakers,1,Одежда
+3e59a823-805a-4d72-8559-a48aedc37832,Utilities,87018.23,Electricity Bill,3,ЖКХ
+609c65f0-b079-4f63-87a8-f0d71ea723cc,Entertainment,77141.48,Game,3,Развлечения
+0a4fe8a1-65bf-4364-8f34-39cb0541845c,Utilities,4304.21,Electricity Bill,3,ЖКХ
+4f13b9d5-ac98-4875-b5b8-b333eedd65c4,Utilities,25032.66,Electricity Bill,2,ЖКХ
+f89d6685-27b9-4d10-a08a-5ea4e355e836,Healthcare,3737.55,First Aid Kit,1,Здоровье
+cd2f646f-a07d-4fd3-87e8-b502041071fd,Transport,1179.43,Metro Pass,3,Транспорт
+505a61b8-1669-4842-8a72-3850ec13047f,Electronics,49173.28,Headphones,1,Все для дома
+56a55dd4-7411-4818-bf17-7a35cab89eeb,Healthcare,77915.76,Pharmacy,5,Здоровье

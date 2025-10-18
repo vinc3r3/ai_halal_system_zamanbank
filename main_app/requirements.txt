@@ -1,0 +1,11 @@
+fastapi
+gTTS
+numpy
+openai
+pandas
+pyper; platform_system == "Darwin"
+python-multipart
+sounddevice
+streamlit
+uvicorn[standard]
+wavio
