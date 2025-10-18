@@ -21,7 +21,7 @@ from llama_cloud.core.api_error import ApiError
 
 # ---------- schema ----------
 class LineItem(BaseModel):
-    item: str = Field(description="Product or service name in the receipt line.")
+    item: str = Field(description="Product or service name in the receipt line. If not present, use 'Unknown item'.")
     pcs: confloat(ge=0) = Field(default=1, description="Quantity; default 1 if missing.")
     amount_money_per_pc: confloat(ge=0) = Field(
         description="Unit price; numeric only, use dot for decimals, no currency sign."
@@ -47,7 +47,8 @@ class LineItem(BaseModel):
             "• Travel — tickets, accommodation, tours, vacation-related costs.\n"
             "• Clothing — apparel, shoes, accessories.\n"
             "• Beauty — cosmetics, salons, personal care services.\n"
-            "• Gifts — presents for others, celebrations, holidays."
+            "• Gifts — presents for others, celebrations, holidays.\n"
+            "• Other — items that do not fit into the above categories or Unknown item."
         )
     )
     category_ru: str = Field(
@@ -68,7 +69,8 @@ class LineItem(BaseModel):
             "• Путешествия → Travel\n"
             "• Одежда → Clothing\n"
             "• Красота → Beauty\n"
-            "• Подарки → Gifts"
+            "• Подарки → Gifts\n"
+            "• Прочее → Other"
         )
     )
 
