@@ -8,34 +8,14 @@ import {
   enrichedTransactions,
   formatCurrency,
   totalSpending,
+  getCategoryColor,
 } from "../data/financialData";
 
-const CATEGORY_COLORS = [
-  "#2D9A86",
-  "#EEFE6D",
-  "#FF6B6B",
-  "#4ECDC4",
-  "#95E1D3",
-  "#F38181",
-  "#AA96DA",
-  "#FCBAD3",
-  "#A8E6CF",
-  "#FFD93D",
-  "#6BCB77",
-  "#4D96FF",
-  "#FF9A76",
-  "#B388EB",
-  "#FEC7D7",
-  "#FFA5AB",
-];
-
-const chartData = categorySummaries.map((summary, index) => ({
+const chartData = categorySummaries.map((summary) => ({
   name: summary.category,
   value: summary.totalAmount,
-  color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+  color: getCategoryColor(summary.category),
 }));
-
-const colorLookup = new Map(chartData.map((entry) => [entry.name, entry.color]));
 
 const CustomTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
@@ -64,7 +44,7 @@ export function FinancesTab() {
 
   return (
     <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
-      <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-4">
+      <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-4 flex-shrink-0">
         <h1 className="text-lg font-semibold dark:text-white">Finances</h1>
       </div>
 
@@ -73,14 +53,15 @@ export function FinancesTab() {
         onValueChange={(value) => setActiveView(value as "analytics" | "transactions")}
         className="flex-1 flex flex-col overflow-hidden"
       >
-        <TabsList className="mx-4 mt-4 grid w-auto grid-cols-2 dark:bg-gray-800">
+        <TabsList className="mx-4 mt-4 grid w-auto grid-cols-2 dark:bg-gray-800 flex-shrink-0">
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
         </TabsList>
 
         <TabsContent value="analytics" className="flex-1 overflow-hidden mt-0">
-          <ScrollArea className="h-full px-4">
-            <div className="py-4 pb-6 space-y-4">
+          <div className="h-full overflow-hidden">
+            <ScrollArea className="h-full px-4">
+              <div className="py-4 pb-6 space-y-4">
               <Card className="p-4 dark:bg-gray-800 dark:border-gray-700">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -129,7 +110,7 @@ export function FinancesTab() {
                         totalSpending > 0
                           ? ((summary.totalAmount / totalSpending) * 100).toFixed(1)
                           : "0.0";
-                      const color = colorLookup.get(summary.category) ?? "#2D9A86";
+                      const color = getCategoryColor(summary.category);
 
                       return (
                         <div key={summary.category} className="flex items-center gap-2">
@@ -160,7 +141,7 @@ export function FinancesTab() {
                     totalSpending > 0
                       ? ((summary.totalAmount / totalSpending) * 100).toFixed(1)
                       : "0.0";
-                  const color = colorLookup.get(summary.category) ?? "#2D9A86";
+                  const color = getCategoryColor(summary.category);
                   const itemsLabel =
                     summary.sampleItems.slice(0, 3).join(", ") || "No items captured";
 
@@ -196,13 +177,15 @@ export function FinancesTab() {
                   );
                 })}
               </div>
-            </div>
-          </ScrollArea>
+              </div>
+            </ScrollArea>
+          </div>
         </TabsContent>
 
         <TabsContent value="transactions" className="flex-1 overflow-hidden mt-0">
-          <ScrollArea className="h-full px-4">
-            <div className="py-4 pb-6 space-y-3">
+          <div className="h-full overflow-hidden">
+            <ScrollArea className="h-full px-4">
+              <div className="py-4 pb-6 space-y-3">
               {enrichedTransactions.map((transaction) => (
                 <Card
                   key={transaction.transactionId}
@@ -244,8 +227,9 @@ export function FinancesTab() {
                   </div>
                 </Card>
               ))}
-            </div>
-          </ScrollArea>
+              </div>
+            </ScrollArea>
+          </div>
         </TabsContent>
       </Tabs>
     </div>
