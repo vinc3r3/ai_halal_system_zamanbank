@@ -1,0 +1,4 @@
+date,time,amount,income_source,transactioner_id
+5/1/2025,09:00,250000,Salary,CUST-24962
+5/15/2025,14:00,12000,Freelance,CUST-24962
+6/1/2025,09:00,250000,Salary,CUST-24962
