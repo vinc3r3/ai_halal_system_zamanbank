@@ -6,3 +6,4 @@ env
 # data files
 data/
 output/
+.DS_Store
