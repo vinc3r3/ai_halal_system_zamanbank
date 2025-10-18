@@ -1,0 +1,8 @@
+.llama
+.venv
+env
+.env
+
+# data files
+data/
+output/
