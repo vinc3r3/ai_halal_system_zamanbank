@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, Mic, Send, Paperclip, Menu, Sparkles, FileText, Search, File, Wallet, ChevronLeft, MessageCircle, Loader2, Volume2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { ScrollArea } from './ui/scroll-area';
 import { enrichedTransactions, formatCurrency } from '../data/financialData';
 
 interface ChatOption {
@@ -475,23 +476,21 @@ export function ChatbotTab() {
 
   if (!selectedChat) {
     return (
-      <div className="flex flex-col h-full overflow-hidden bg-gray-50 dark:bg-gray-900">
-        {/* Header */}
-        <div className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 py-4">
+      <div className="flex h-full flex-col bg-gray-50 dark:bg-gray-900">
+        <div className="border-b border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
           <div className="flex items-center justify-between">
-            <h1 className="text-lg dark:text-white">Zaman GPT</h1>
-            <button className="p-2" type="button" aria-label="Open chat menu">
-              <Menu className="w-6 h-6 dark:text-white" />
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">Zaman GPT</h1>
+            <button className="rounded-full p-2 hover:bg-gray-100 dark:hover:bg-gray-700" type="button" aria-label="Open chat menu">
+              <Menu className="h-6 w-6 text-gray-700 dark:text-gray-200" />
             </button>
           </div>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
             Pick a conversation to get started, or open ZamanAI for tailored guidance.
           </p>
         </div>
 
-        {/* Chat option cards */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <ScrollArea className="flex-1 px-4 pb-4">
+          <div className="space-y-3 py-4">
             {chatOptions.map((option) => (
               <button
                 key={option.id}
@@ -501,26 +500,33 @@ export function ChatbotTab() {
                   setMessages([]);
                   setExpandedTransaction(null);
                 }}
-                className="group rounded-xl border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-gray-700 dark:bg-gray-800"
+                className="group w-full rounded-2xl bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2D9A86] focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-800/90 dark:focus-visible:ring-offset-gray-900"
               >
-                <div className="flex items-start justify-between">
-                  <span className="rounded-md bg-blue-100 p-2 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                <div className="flex items-start gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#EEFE6D] text-[#1F6F63] shadow-inner shadow-black/10">
                     {option.icon}
                   </span>
-                  {option.badge && (
-                    <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
-                      {option.badge}
-                    </span>
-                  )}
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <h2 className="text-base font-semibold text-gray-900 transition-colors dark:text-white dark:group-hover:text-[#EEFE6D] group-hover:text-[#1F6F63]">
+                        {option.title}
+                      </h2>
+                      {option.badge ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[#2D9A86] px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-white">
+                          <Sparkles className="h-3 w-3" />
+                          {option.badge}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm text-gray-600 transition-colors dark:text-gray-300 group-hover:text-gray-700 dark:group-hover:text-gray-200">
+                      {option.description}
+                    </p>
+                  </div>
                 </div>
-                <h2 className="mt-4 text-base font-semibold text-gray-900 dark:text-white">
-                  {option.title}
-                </h2>
-                <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{option.description}</p>
               </button>
             ))}
           </div>
-        </div>
+        </ScrollArea>
       </div>
     );
   }
@@ -629,23 +635,41 @@ export function ChatbotTab() {
                   setMessages([]);
                   setExpandedTransaction(null);
                 }}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition ${
+                className={`group relative flex w-full items-center gap-3 rounded-2xl border border-transparent px-3 py-3 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#2D9A86] dark:focus-visible:ring-offset-gray-900 ${
                   isActive
-                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-200'
-                    : 'hover:bg-gray-100 dark:hover:bg-gray-800/60'
+                    ? 'bg-gradient-to-r from-[#2D9A86]/20 via-white to-white shadow-sm dark:from-[#2D9A86]/25 dark:via-gray-900 dark:to-gray-900'
+                    : 'hover:border-[#2D9A86]/40 hover:bg-white/70 dark:hover:bg-gray-800/70'
                 }`}
               >
-                <span className="rounded-md bg-blue-100 p-2 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                <span
+                  className={`flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-sm transition-all duration-200 ${
+                    isActive
+                      ? 'bg-gradient-to-br from-[#2D9A86] to-[#1F6F63]'
+                      : 'bg-gray-100 text-[#2D9A86] shadow-none group-hover:text-[#1F6F63] dark:bg-gray-800 dark:text-[#EEFE6D]'
+                  }`}
+                >
                   {option.icon}
                 </span>
                 <div className="flex-1">
-                  <p className="text-sm font-medium leading-tight text-gray-900 dark:text-white">
+                  <p
+                    className={`text-sm font-semibold leading-tight transition-colors ${
+                      isActive ? 'text-[#1F6F63] dark:text-[#EEFE6D]' : 'text-gray-900 dark:text-white'
+                    }`}
+                  >
                     {option.title}
                   </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">{option.description}</p>
+                  <p className="mt-1 text-xs text-gray-500 transition-colors duration-150 group-hover:text-gray-600 dark:text-gray-400 dark:group-hover:text-gray-300">
+                    {option.description}
+                  </p>
                 </div>
                 {option.badge && (
-                  <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                  <span
+                    className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+                      isActive
+                        ? 'border-[#2D9A86]/40 bg-[#EEFE6D]/90 text-[#1F6F63]'
+                        : 'border-transparent bg-[#EEFE6D]/70 text-[#1F6F63] group-hover:border-[#2D9A86]/30'
+                    } dark:border-[#2D9A86]/40 dark:bg-gray-800/80 dark:text-[#EEFE6D]`}
+                  >
                     {option.badge}
                   </span>
                 )}
