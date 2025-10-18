@@ -1,0 +1,69 @@
+{
+  "transaction_id": "285462",
+  "items": [
+    {
+      "item": "САРЫМСАҚ",
+      "pcs": 0.028,
+      "amount_money_per_pc": 1345.0,
+      "amount_money": 37.66,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "ЛИМОН ТҮРКИЯ",
+      "pcs": 0.138,
+      "amount_money_per_pc": 1695.0,
+      "amount_money": 233.91,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "ҚЫЗАНАҚ ҚАЗАҚСТАН",
+      "pcs": 0.7,
+      "amount_money_per_pc": 1185.0,
+      "amount_money": 829.5,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "КУС ВКУС Б/Б СҮБЕ ЕТІ ТӨСЕМ ТОҢАЗЫ ТЫЛҒАН",
+      "pcs": 1.144,
+      "amount_money_per_pc": 1999.0,
+      "amount_money": 2286.86,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "РАВА ҚАЗАҚСТАН ҚИЯРЫ",
+      "pcs": 0.714,
+      "amount_money_per_pc": 695.0,
+      "amount_money": 496.23,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "FUSE TEA СУСЫН ШӘЙ ЛИМОН 1 л П/Б",
+      "pcs": 1.0,
+      "amount_money_per_pc": 419.0,
+      "amount_money": 419.0,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "FUSE TEA ҚАРБЫЗ ДӘМІ БАР СУСЫНЫ 1Л П/Б",
+      "pcs": 1.0,
+      "amount_money_per_pc": 419.0,
+      "amount_money": 419.0,
+      "category": "Groceries",
+      "category_ru": "Продукты"
+    },
+    {
+      "item": "MAGNUM ПАКЕТІ АҚЫЛЫ",
+      "pcs": 1.0,
+      "amount_money_per_pc": 15.0,
+      "amount_money": 15.0,
+      "category": "Home & Furniture",
+      "category_ru": "Все для дома"
+    }
+  ]
+}

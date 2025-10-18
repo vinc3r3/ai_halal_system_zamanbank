@@ -4,8 +4,8 @@ env
 .env
 
 # data files
-data/
-output/
+# data/
+# output/
 .DS_Store
 old_ui
 output.mp3
