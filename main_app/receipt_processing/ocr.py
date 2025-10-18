@@ -17,7 +17,7 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--out", required=True, type=Path, help="Output directory")
     p.add_argument("--env", default="./.env", type=Path, help="Path to .env with LLAMA_CLOUD_API_KEY")
     p.add_argument("--lang", default="ru", help="Language hint, e.g., ru/en")
-    p.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Result format to save")
+    p.add_argument("--format", choices=["markdown", "json"], default="json", help="Result format to save")
     p.add_argument("--prompt", default=None, help="Inline parsing instruction")
     p.add_argument("--prompt-file", type=Path, help="Path to a .txt with parsing instruction")
     p.add_argument("--concurrency", type=int, default=6, help="Parallel parses")
