@@ -102,11 +102,11 @@ def write_csv(receipts: List[BaseModel], out_path: Path) -> None:
         if write_header:
             writer.writerow([
                 "transaction_id",
+                "category",
+                "amount_money",
                 "item",
                 "pcs",
-                "amount_money_per_pc",
-                "amount_money",
-                "category",
+                # "amount_money_per_pc",
                 "category_ru",
             ])
 
@@ -114,11 +114,11 @@ def write_csv(receipts: List[BaseModel], out_path: Path) -> None:
             for item in receipt.items:
                 writer.writerow([
                     receipt.transaction_id,
+                    item.category,
+                    item.amount_money,
                     item.item,
                     item.pcs,
-                    item.amount_money_per_pc,
-                    item.amount_money,
-                    item.category,
+                    # item.amount_money_per_pc,
                     item.category_ru,
                 ])
 
@@ -213,7 +213,7 @@ def main() -> None:
             )
 
             # csv output can be added if needed
-            write_csv([Receipt(**data)], args.out / "all_receipts.csv")
+            write_csv([Receipt(**data)], Path("../zamanbank_finances.csv"))
 
         except Exception as e:
             err_count += 1
