@@ -21,16 +21,56 @@ from llama_cloud.core.api_error import ApiError
 
 # ---------- schema ----------
 class LineItem(BaseModel):
-    item: str = Field(description="Product/service name in receipt line")
-    pcs: conint(ge=1) = Field(default=1, description="Quantity; default 1 if missing")
+    item: str = Field(description="Product or service name in the receipt line.")
+    pcs: confloat(ge=0) = Field(default=1, description="Quantity; default 1 if missing.")
     amount_money_per_pc: confloat(ge=0) = Field(
-        description="Line amount numeric only; use dot decimal; no currency sign"
+        description="Unit price; numeric only, use dot for decimals, no currency sign."
     )
     amount_money: confloat(ge=0) = Field(
-        description="Total line amount numeric only; use dot decimal; no currency sign"
+        description="Total line amount; numeric only, use dot for decimals, no currency sign."
     )
-    category: str = Field(description="Category in English; infer if not present")
-    category_ru: str = Field(description="Category in Russian; infer if not present")
+    category: str = Field(
+        description=(
+            "Category in English; must correspond to one of the following:\n"
+            "• Utilities & Housing — payments for rent, water, electricity, heating, maintenance fees.\n"
+            "• Home & Furniture — household items, decor, furniture, cleaning supplies.\n"
+            "• Pocket Money — small personal or daily expenses, spontaneous cash spending.\n"
+            "• Groceries — food and beverages purchased in stores and supermarkets.\n"
+            "• Transport — public transit, taxi, fuel, parking, or car maintenance.\n"
+            "• Dining & Cafes — eating out: restaurants, cafes, delivery services.\n"
+            "• Entertainment — movies, games, events, subscriptions, leisure activities.\n"
+            "• Communication — mobile plans, internet, subscriptions for connectivity.\n"
+            "• Health — medicines, clinics, dental care, supplements, health insurance.\n"
+            "• Car Expenses — repairs, maintenance, car wash, accessories.\n"
+            "• Sports — gym memberships, equipment, sportswear, training.\n"
+            "• Children — kids’ education, toys, clothes, activities.\n"
+            "• Travel — tickets, accommodation, tours, vacation-related costs.\n"
+            "• Clothing — apparel, shoes, accessories.\n"
+            "• Beauty — cosmetics, salons, personal care services.\n"
+            "• Gifts — presents for others, celebrations, holidays."
+        )
+    )
+    category_ru: str = Field(
+        description=(
+            "Category in Russian; paired with the English category above:\n"
+            "• ЖКХ → Utilities & Housing\n"
+            "• Все для дома → Home & Furniture\n"
+            "• Карманные → Pocket Money\n"
+            "• Продукты → Groceries\n"
+            "• Транспорт → Transport\n"
+            "• Еда → Dining & Cafes\n"
+            "• Развлечения → Entertainment\n"
+            "• Связь → Communication\n"
+            "• Здоровье → Health\n"
+            "• Авто → Car Expenses\n"
+            "• Спорт → Sports\n"
+            "• Дети → Children\n"
+            "• Путешествия → Travel\n"
+            "• Одежда → Clothing\n"
+            "• Красота → Beauty\n"
+            "• Подарки → Gifts"
+        )
+    )
 
 class Receipt(BaseModel):
     transaction_id: str = Field(description="Receipt/transaction/check number")
@@ -44,15 +84,30 @@ def find_files(root: Path, recursive: bool) -> List[Path]:
         return [p for p in root.rglob("*") if p.suffix.lower() in exts]
     return [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in exts]
 
-# --------- helpers ----------
-# csv writing can be added here if needed
-def write_csv(receipts: List[Receipt], out_path: Path) -> None:
+def write_csv(receipts: List[BaseModel], out_path: Path) -> None:
+    """Append new receipt samples to CSV, create header only if file is new."""
     import csv
+    # ensure directory exists
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with out_path.open("w", encoding="utf-8", newline="") as f:
+    file_exists = out_path.exists()
+    write_header = not file_exists or out_path.stat().st_size == 0
+
+    # open in append mode
+    with out_path.open("a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["transaction_id", "item", "pcs", "amount_money_per_pc",
-                         "amount_money", "category", "category_ru"])
+
+        if write_header:
+            writer.writerow([
+                "transaction_id",
+                "item",
+                "pcs",
+                "amount_money_per_pc",
+                "amount_money",
+                "category",
+                "category_ru",
+            ])
+
         for receipt in receipts:
             for item in receipt.items:
                 writer.writerow([
