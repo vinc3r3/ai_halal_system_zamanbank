@@ -8,3 +8,5 @@ data/
 output/
 .DS_Store
 old_ui
+output.mp3
+tests.ipynb

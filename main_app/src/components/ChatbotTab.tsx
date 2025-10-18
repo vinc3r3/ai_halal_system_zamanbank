@@ -1,5 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { Camera, Mic, Send, Paperclip, Menu, Sparkles, FileText, Search, File, Wallet, ChevronLeft, MessageCircle, Loader2, Volume2 } from 'lucide-react';
+﻿import { useEffect, useRef, useState } from 'react';
+import {
+  Camera,
+  Mic,
+  Send,
+  Paperclip,
+  Menu,
+  Sparkles,
+  FileText,
+  Search,
+  File,
+  Wallet,
+  ChevronLeft,
+  Loader2,
+  Volume2,
+} from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
@@ -16,83 +30,88 @@ interface ChatOption {
 const chatOptions: ChatOption[] = [
   {
     id: 'financial-diary',
-    title: 'Financial Diary',
-    description: 'Review recent spending, receipts, and quick insights.',
+    title: 'Финансовый дневник',
+    description: 'Отслеживайте расходы и доходы',
     icon: <Wallet className="w-6 h-6" />,
   },
   {
     id: 'zaman-ai',
     title: 'Zaman AI',
-    description: 'Ask for personalised banking guidance powered by ZamanAI.',
+    description:
+      'Как взять кредит, копить и тратить, не нарушая законов Шариата',
     icon: <Sparkles className="w-6 h-6" />,
-    badge: 'AI',
+    badge: 'Халяль',
   },
   {
     id: 'text-work',
-    title: 'Documents & Writing',
-    description: 'Draft letters, summarise notes, or polish your pitch.',
+    title: 'Работа с текстом',
+    description: 'Пишет за вас, подсказывает идеи',
     icon: <FileText className="w-6 h-6" />,
-    badge: 'GPT-4o mini',
+    badge: 'GPT-4o бесплатно',
   },
   {
     id: 'ai-search',
-    title: 'AI Search',
-    description: 'Quick answers from trusted sources without leaving chat.',
+    title: 'ИИ-поисковик',
+    description: 'Ищет ответы на любые вопросы',
     icon: <Search className="w-6 h-6" />,
   },
   {
     id: 'file-work',
-    title: 'Files & Uploads',
-    description: 'Send documents or images for instant discussion.',
+    title: 'Работа с файлами',
+    description: 'Ищет важное в файлах и объясняет простыми словами',
     icon: <File className="w-6 h-6" />,
   },
 ];
 
+// --- ENV / helpers ---
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'http://localhost:8000';
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ??
+  'http://localhost:8000';
+
 const TIMESTAMP_LOCALE: Intl.LocalesArgument = 'ru-RU';
 const formatTimestamp = () =>
-  new Date().toLocaleTimeString(TIMESTAMP_LOCALE, { hour: '2-digit', minute: '2-digit' });
-const detectLanguage = (text: string): string => (/[\u0400-\u04FF]/.test(text) ? 'ru' : 'en');
-const GENERAL_ERROR = 'Unable to reach ZamanAI. Please try again later.';
-const TRANSCRIPTION_ERROR = 'We could not understand your recording. Please try again.';
-const MICROPHONE_ERROR = 'We could not access your microphone. Check permissions and try again.';
-const AUDIO_ERROR = 'Unable to play the audio response. Please try again.';
-const VOICE_UNAVAILABLE_ERROR = 'Voice transcription is not available with the current backend configuration.';
+  new Date().toLocaleTimeString(TIMESTAMP_LOCALE, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+const detectLanguage = (text: string): 'ru' | 'en' =>
+  /[\u0400-\u04FF]/.test(text) ? 'ru' : 'en';
+
+// --- Fixed Russian strings (previously mojibake) ---
+const GENERAL_ERROR = '?? ??????? ????????? ? Zaman AI. ????????? ??????? ?????.';
+const TRANSCRIPTION_ERROR =
+  'Не удалось распознать голосовое сообщение. Попробуйте ещё раз.';
+const MICROPHONE_ERROR =
+  'Нет доступа к микрофону. Проверьте разрешения и повторите попытку.';
+const AUDIO_ERROR =
+  'Не удалось воспроизвести аудиоответ. Попробуйте ещё раз.';
+const VOICE_UNAVAILABLE_ERROR =
+  'Голосовые функции недоступны для текущей конфигурации.';
 
 const extractChatReply = (payload: unknown): string | null => {
-  if (!payload || typeof payload !== 'object') {
-    return null;
-  }
-
+  if (!payload || typeof payload !== 'object') return null;
   const data = payload as Record<string, unknown>;
   const candidates = [data.response, data.reply, data.message];
 
   for (const candidate of candidates) {
     if (typeof candidate === 'string') {
       const trimmed = candidate.trim();
-      if (trimmed) {
-        return trimmed;
-      }
+      if (trimmed) return trimmed;
     }
   }
-
   return null;
 };
 
 const decodeBase64Audio = (base64Audio: string): Uint8Array => {
   const binary = atob(base64Audio);
-  const length = binary.length;
-  const bytes = new Uint8Array(length);
-
-  for (let index = 0; index < length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
 };
 
 const fetchAudioResponse = async (text: string, language: string): Promise<Blob> => {
+  // Try both endpoints for compatibility
   const endpoints = [`${API_BASE_URL}/tts`, `${API_BASE_URL}/speech`];
   const payload = JSON.stringify({ text, language });
   let lastError: Error | null = null;
@@ -106,45 +125,48 @@ const fetchAudioResponse = async (text: string, language: string): Promise<Blob>
       });
 
       if (!response.ok) {
-        if (response.status === 404) {
-          continue;
-        }
-
+        if (response.status === 404) continue;
         let detail: string | undefined;
         try {
           const errorBody = await response.json();
-          detail = typeof errorBody?.detail === 'string' ? errorBody.detail : undefined;
+          detail =
+            typeof errorBody?.detail === 'string' ? errorBody.detail : undefined;
         } catch {
-          // Ignore parse errors
+          // ignore
         }
-        throw new Error(detail ?? 'ZamanAI is unavailable right now. Please try again later.');
+        throw new Error(detail ?? 'Zaman AI сейчас недоступен. Попробуйте позже.');
       }
 
       const contentType = response.headers.get('content-type') ?? '';
       if (contentType.includes('application/json')) {
         const data = await response.json();
+
+        // Accept `audio_base64` or `audioBase64` or `audio`
         const audioBase64 =
-          (typeof data?.audio_base64 === 'string' && data.audio_base64) ||
-          (typeof data?.audioBase64 === 'string' && data.audioBase64);
+          (typeof (data as any)?.audio_base64 === 'string' && (data as any).audio_base64) ||
+          (typeof (data as any)?.audioBase64 === 'string' && (data as any).audioBase64) ||
+          (typeof (data as any)?.audio === 'string' && (data as any).audio);
 
         if (!audioBase64) {
           const detail =
-            (typeof data?.detail === 'string' && data.detail) ||
-            (typeof data?.message === 'string' && data.message);
-          throw new Error(detail ?? 'Unexpected audio payload from ZamanAI.');
+            (typeof (data as any)?.detail === 'string' && (data as any).detail) ||
+            (typeof (data as any)?.message === 'string' && (data as any).message);
+          throw new Error(detail ?? 'Получен неожиданный аудиоответ от Zaman AI.');
         }
 
         const mimeType =
-          (typeof data?.mime_type === 'string' && data.mime_type) ||
-          (typeof data?.mimeType === 'string' && data.mimeType) ||
+          (typeof (data as any)?.mime_type === 'string' && (data as any).mime_type) ||
+          (typeof (data as any)?.mimeType === 'string' && (data as any).mimeType) ||
           'audio/mpeg';
+
         const audioBytes = decodeBase64Audio(audioBase64);
         return new Blob([audioBytes], { type: mimeType });
       }
 
+      // If backend streams raw bytes
       return await response.blob();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(GENERAL_ERROR);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(GENERAL_ERROR);
     }
   }
 
@@ -163,6 +185,7 @@ interface Message {
 }
 
 const diaryTransactions = enrichedTransactions;
+
 export function ChatbotTab() {
   const [selectedChat, setSelectedChat] = useState<string | null>(null);
   const [message, setMessage] = useState('');
@@ -173,6 +196,7 @@ export function ChatbotTab() {
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [expandedTransaction, setExpandedTransaction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -185,16 +209,19 @@ export function ChatbotTab() {
     return () => {
       isMountedRef.current = false;
 
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== 'inactive'
+      ) {
         try {
           mediaRecorderRef.current.stop();
         } catch {
-          // Ignore recorder shutdown issues
+          // ignore
         }
       }
 
       if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
       }
 
@@ -210,18 +237,14 @@ export function ChatbotTab() {
   }, [selectedChat]);
 
   const mapHistory = (history: Message[]) =>
-    history.map((msg) => ({
-      role: msg.sender === 'user' ? 'user' : 'assistant',
-      content: msg.text,
+    history.map((m) => ({
+      role: m.sender === 'user' ? 'user' : 'assistant',
+      content: m.text,
     }));
 
   const submitMessage = async (content: string) => {
     const trimmed = content.trim();
-    if (!trimmed || isProcessing) {
-      return;
-    }
-
-    const historyPayload = mapHistory(messages);
+    if (!trimmed || isProcessing) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -240,7 +263,7 @@ export function ChatbotTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: trimmed,
-          history: historyPayload,
+          history: mapHistory(messages),
         }),
       });
 
@@ -248,21 +271,19 @@ export function ChatbotTab() {
         if (response.status === 404) {
           throw new Error(VOICE_UNAVAILABLE_ERROR);
         }
-        let detail = 'ZamanAI is unavailable right now. Please try again later.';
+        let detail = 'Zaman AI сейчас недоступен. Попробуйте позже.';
         try {
           const errorBody = await response.json();
-          detail = errorBody.detail ?? detail;
+          if (typeof errorBody?.detail === 'string') detail = errorBody.detail;
         } catch {
-          // Ignore body parse issues
+          // ignore
         }
         throw new Error(detail);
       }
 
       const data = await response.json();
       const aiText = extractChatReply(data);
-      if (!aiText) {
-        throw new Error('Unexpected response from ZamanAI.');
-      }
+      if (!aiText) throw new Error('Неожиданный ответ от Zaman AI.');
 
       const aiMessage: Message = {
         id: `${Date.now()}-ai`,
@@ -288,10 +309,7 @@ export function ChatbotTab() {
 
   const handleSend = () => {
     const trimmed = message.trim();
-    if (!trimmed) {
-      return;
-    }
-
+    if (!trimmed) return;
     setMessage('');
     void submitMessage(trimmed);
   };
@@ -304,21 +322,20 @@ export function ChatbotTab() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // hook your upload/analysis pipeline here
       console.log('File selected:', file);
     }
   };
 
   const stopMediaStream = () => {
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
     }
   };
 
   const transcribeAudio = async (audioBlob: Blob) => {
-    if (!audioBlob || audioBlob.size === 0) {
-      return;
-    }
+    if (!audioBlob || audioBlob.size === 0) return;
 
     setIsTranscribing(true);
     setError(null);
@@ -333,12 +350,12 @@ export function ChatbotTab() {
       });
 
       if (!response.ok) {
-        let detail = 'ZamanAI is unavailable right now. Please try again later.';
+        let detail = 'Zaman AI сейчас недоступен. Попробуйте позже.';
         try {
           const errorBody = await response.json();
-          detail = errorBody.detail ?? detail;
+          if (typeof errorBody?.detail === 'string') detail = errorBody.detail;
         } catch {
-          // Ignore parse issues
+          // ignore
         }
         throw new Error(detail);
       }
@@ -357,9 +374,7 @@ export function ChatbotTab() {
         setError(err instanceof Error ? err.message : GENERAL_ERROR);
       }
     } finally {
-      if (isMountedRef.current) {
-        setIsTranscribing(false);
-      }
+      if (isMountedRef.current) setIsTranscribing(false);
     }
   };
 
@@ -378,14 +393,21 @@ export function ChatbotTab() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      const recorder = new MediaRecorder(stream);
+      const mimeTypeOptions = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+      ];
+      const supportedMime =
+        mimeTypeOptions.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+
+      const recorder = new MediaRecorder(stream, supportedMime ? { mimeType: supportedMime } : undefined);
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
       recorder.addEventListener('dataavailable', (event) => {
-        if (event.data && event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+        if (event.data && event.data.size > 0) audioChunksRef.current.push(event.data);
       });
 
       recorder.addEventListener('stop', async () => {
@@ -410,11 +432,8 @@ export function ChatbotTab() {
   };
 
   const handlePlayLastResponse = async () => {
-    const lastAssistantMessage = [...messages].reverse().find((msg) => msg.sender === 'ai');
-
-    if (!lastAssistantMessage || isGeneratingAudio) {
-      return;
-    }
+    const lastAssistantMessage = [...messages].reverse().find((m) => m.sender === 'ai');
+    if (!lastAssistantMessage || isGeneratingAudio) return;
 
     setIsGeneratingAudio(true);
     setError(null);
@@ -422,7 +441,7 @@ export function ChatbotTab() {
     try {
       const audioBlob = await fetchAudioResponse(
         lastAssistantMessage.text,
-        detectLanguage(lastAssistantMessage.text),
+        detectLanguage(lastAssistantMessage.text)
       );
 
       if (audioSourceRef.current) {
@@ -433,24 +452,18 @@ export function ChatbotTab() {
       audioSourceRef.current = audioUrl;
 
       const player = audioPlayerRef.current;
-      if (!player) {
-        throw new Error('Audio element is not ready.');
-      }
+      if (!player) throw new Error('Аудиоэлемент ещё не готов.');
 
       player.src = audioUrl;
       const playPromise = player.play();
-      if (playPromise !== undefined) {
-        await playPromise;
-      }
+      if (playPromise !== undefined) await playPromise;
     } catch (err) {
       console.error(err);
       if (isMountedRef.current) {
         setError(err instanceof Error ? err.message : AUDIO_ERROR);
       }
     } finally {
-      if (isMountedRef.current) {
-        setIsGeneratingAudio(false);
-      }
+      if (isMountedRef.current) setIsGeneratingAudio(false);
     }
   };
 
@@ -459,18 +472,9 @@ export function ChatbotTab() {
   };
 
   const statusText = (() => {
-    if (error) {
-      return error;
-    }
-    if (isTranscribing) {
-      return 'Transcribing your message...';
-    }
-    if (isProcessing) {
-      return 'ZamanAI is thinking...';
-    }
-    if (isGeneratingAudio) {
-      return 'Preparing audio response...';
-    }
+    if (isTranscribing) return 'Преобразуем запись в текст...';
+    if (isProcessing) return 'Zaman AI готовит ответ...';
+    if (isGeneratingAudio) return 'Готовим аудиоответ...';
     return null;
   })();
 
@@ -480,12 +484,16 @@ export function ChatbotTab() {
         <div className="border-b border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold text-gray-900 dark:text-white">Zaman GPT</h1>
-            <button className="rounded-full p-2 hover:bg-gray-100 dark:hover:bg-gray-700" type="button" aria-label="Open chat menu">
+            <button
+              className="rounded-full p-2 hover:bg-gray-100 dark:hover:bg-gray-700"
+              type="button"
+              aria-label="Открыть меню чата"
+            >
               <Menu className="h-6 w-6 text-gray-700 dark:text-gray-200" />
             </button>
           </div>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Pick a conversation to get started, or open ZamanAI for tailored guidance.
+            Выберите раздел, чтобы начать, или откройте Zaman AI для персональной помощи.
           </p>
         </div>
 
@@ -531,9 +539,9 @@ export function ChatbotTab() {
     );
   }
 
-  const activeChat = chatOptions.find((option) => option.id === selectedChat);
-  const activeTitle = activeChat?.title ?? 'Conversation';
-  const activeDescription = activeChat?.description ?? 'Chat with ZamanAI.';
+  const activeChat = chatOptions.find((o) => o.id === selectedChat);
+  const activeTitle = activeChat?.title ?? 'Диалог';
+  const activeDescription = activeChat?.description ?? 'Общайтесь с Zaman AI.';
 
   const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -543,300 +551,308 @@ export function ChatbotTab() {
   };
 
   const renderTransactionList = () => {
-    if (selectedChat !== 'financial-diary') {
-      return null;
+    if (selectedChat !== 'financial-diary') return null;
+
+    const transactionsToShow = diaryTransactions.slice(0, 8);
+    const accentClasses = [
+      'bg-[#2D9A86]',
+      'bg-[#FFB74D]',
+      'bg-[#4C6EF5]',
+      'bg-[#E57373]',
+      'bg-[#7E57C2]',
+    ];
+    const pickAccent = (seed: string) => {
+      if (!seed) return accentClasses[0];
+      const code = seed.charCodeAt(0);
+      const index = Number.isFinite(code) ? Math.abs(code) % accentClasses.length : 0;
+      return accentClasses[index];
+    };
+
+    if (!transactionsToShow.length) {
+      return (
+        <div className="rounded-2xl bg-white p-6 text-center shadow-sm dark:bg-gray-800">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#EEFE6D]">
+            <Wallet className="h-10 w-10 text-[#1F6F63]" />
+          </div>
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            Пока нет недавней активности.
+          </p>
+        </div>
+      );
     }
 
     return (
-      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <header className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Recent Transactions</h2>
-          <button
-            type="button"
-            className="inline-flex items-center text-xs font-medium text-blue-600 hover:underline dark:text-blue-300"
-            onClick={() => setExpandedTransaction(null)}
-          >
-            Clear
-          </button>
-        </header>
-        <div className="mt-3 space-y-3">
-          {diaryTransactions.slice(0, 8).map((transaction) => (
+      <div className="space-y-4">
+        {transactionsToShow.map((transaction) => {
+          const label = transaction.item?.trim() || 'Покупка';
+          const initial = label.charAt(0).toUpperCase() || 'T';
+          const accentClass =
+            pickAccent(label || transaction.category || transaction.transactionId);
+          const isExpanded = expandedTransaction === transaction.transactionId;
+
+          return (
             <div
               key={transaction.transactionId}
-              className="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900"
+              className="rounded-2xl bg-white p-4 shadow-sm dark:bg-gray-800"
             >
-              <button
-                type="button"
-                className="flex w-full items-start justify-between text-left"
-                onClick={() => toggleTransactionActions(transaction.transactionId)}
-              >
-                <div>
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                    {transaction.item ?? 'Transaction'}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {transaction.date} · {transaction.time}
-                  </p>
+              <div className="flex items-start gap-3">
+                <div
+                  className={`flex h-12 w-12 items-center justify-center rounded-full text-white ${accentClass}`}
+                >
+                  <span className="text-lg font-semibold">{initial}</span>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                    {formatCurrency(transaction.amount)}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {transaction.category ?? 'Uncategorised'}
-                  </p>
-                </div>
-              </button>
-              {expandedTransaction === transaction.transactionId && (
-                <div className="mt-3 space-y-2 text-xs text-gray-600 dark:text-gray-300">
-                  <p>Customer: {transaction.customerId || '—'}</p>
-                  <p>
-                    Receipt: {transaction.hasReceipt ? 'Available in archive' : 'No receipt uploaded yet'}
-                  </p>
-                  {typeof transaction.quantity === 'number' && <p>Quantity: {transaction.quantity}</p>}
-                  <div className="flex flex-wrap gap-2 pt-1 text-xs">
-                    <Button variant="outline" className="h-7 px-3 text-xs">
-                      View Details
-                    </Button>
-                    <Button variant="ghost" className="h-7 px-3 text-xs">
-                      Flag
-                    </Button>
+                <div className="flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">
+                        {label}
+                      </p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        Сумма: {formatCurrency(transaction.amount)}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Категория: {transaction.category ?? 'Без категории'}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-gray-500 dark:text-gray-400">
+                      {transaction.date}
+                      <br />
+                      {transaction.time}
+                    </div>
                   </div>
+                  {isExpanded ? (
+                    <div className="mt-3 space-y-2 text-xs text-gray-600 dark:text-gray-300">
+                      <p>Клиент: {transaction.customerId || '—'}</p>
+                      <p>Чек: {transaction.hasReceipt ? 'Есть' : 'Нет'}</p>
+                      {typeof transaction.quantity === 'number' ? (
+                        <p>Количество: {transaction.quantity}</p>
+                      ) : null}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          className="rounded-full bg-[#2D9A86] px-3 py-1 text-xs font-semibold text-white transition hover:bg-[#268976]"
+                        >
+                          Отметить проверенным
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
+                        >
+                          Добавить заметку
+                        </button>
+                        {transaction.hasReceipt ? (
+                          <button
+                            type="button"
+                            className="rounded-full border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
+                          >
+                            Открыть чек
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              )}
+              </div>
+
+              <div className="mt-3 border-t border-gray-100 pt-3 text-right dark:border-gray-700">
+                <button
+                  type="button"
+                  onClick={() => toggleTransactionActions(transaction.transactionId)}
+                  className="text-sm font-medium text-[#2D9A86] transition hover:text-[#268976]"
+                >
+                  {isExpanded ? 'Скрыть быстрые действия' : 'Показать быстрые действия'}
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
-      </section>
+          );
+        })}
+      </div>
     );
   };
 
-  const canReplayAudio = messages.some((msg) => msg.sender === 'ai');
+  const canReplayAudio = messages.some((m) => m.sender === 'ai');
   const disableComposer = isProcessing || isTranscribing;
 
   return (
-    <div className="flex h-full overflow-hidden bg-gray-50 dark:bg-gray-900">
-      <aside className="hidden w-72 flex-col border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 md:flex">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Conversations</h2>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Jump into ZamanAI experiences tuned for everyday banking.
-          </p>
+    <div className="flex h-full flex-col bg-gray-50 dark:bg-gray-900">
+      <div className="border-b border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setSelectedChat(null)}
+            className="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Назад к разделам"
+          >
+            <ChevronLeft className="h-6 w-6 text-gray-700 dark:text-gray-200" />
+          </button>
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#EEFE6D] text-[#1F6F63]">
+            {activeChat?.icon}
+          </div>
+          <div className="flex-1">
+            <h1 className="text-base font-semibold text-gray-900 dark:text-white">
+              {activeTitle}
+            </h1>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              {activeDescription}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handlePlayLastResponse}
+            disabled={!canReplayAudio || isGeneratingAudio}
+            className="inline-flex items-center gap-2 rounded-full border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            {isGeneratingAudio ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Воспроизводим...
+              </>
+            ) : (
+              <>
+                <Volume2 className="h-4 w-4" />
+                Повтор
+              </>
+            )}
+          </button>
         </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-6">
-          {chatOptions.map((option) => {
-            const isActive = option.id === selectedChat;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => {
-                  setSelectedChat(option.id);
-                  setMessages([]);
-                  setExpandedTransaction(null);
-                }}
-                className={`group relative flex w-full items-center gap-3 rounded-2xl border border-transparent px-3 py-3 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#2D9A86] dark:focus-visible:ring-offset-gray-900 ${
-                  isActive
-                    ? 'bg-gradient-to-r from-[#2D9A86]/20 via-white to-white shadow-sm dark:from-[#2D9A86]/25 dark:via-gray-900 dark:to-gray-900'
-                    : 'hover:border-[#2D9A86]/40 hover:bg-white/70 dark:hover:bg-gray-800/70'
-                }`}
+      </div>
+
+      <ScrollArea className="flex-1 px-4">
+        <div className="space-y-4 py-4">
+          {selectedChat === 'financial-diary' ? (
+            renderTransactionList()
+          ) : messages.length === 0 ? (
+            <div className="py-12 text-center">
+              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#EEFE6D]">
+                {activeChat?.icon}
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Начните диалог: {activeChat?.title}.
+              </p>
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <span
-                  className={`flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-sm transition-all duration-200 ${
-                    isActive
-                      ? 'bg-gradient-to-br from-[#2D9A86] to-[#1F6F63]'
-                      : 'bg-gray-100 text-[#2D9A86] shadow-none group-hover:text-[#1F6F63] dark:bg-gray-800 dark:text-[#EEFE6D]'
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${
+                    msg.sender === 'user'
+                      ? 'bg-[#2D9A86] text-white'
+                      : 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-gray-100'
                   }`}
                 >
-                  {option.icon}
-                </span>
-                <div className="flex-1">
+                  <p>{msg.text}</p>
+                  {msg.attachment ? (
+                    <div className="mt-2 text-xs opacity-80">
+                      <span className="inline-flex items-center rounded bg-white/20 px-2 py-0.5">
+                        {msg.attachment.type.toUpperCase()} attachment
+                      </span>
+                    </div>
+                  ) : null}
                   <p
-                    className={`text-sm font-semibold leading-tight transition-colors ${
-                      isActive ? 'text-[#1F6F63] dark:text-[#EEFE6D]' : 'text-gray-900 dark:text-white'
+                    className={`mt-2 text-xs ${
+                      msg.sender === 'user'
+                        ? 'text-white/70'
+                        : 'text-gray-500 dark:text-gray-400'
                     }`}
                   >
-                    {option.title}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500 transition-colors duration-150 group-hover:text-gray-600 dark:text-gray-400 dark:group-hover:text-gray-300">
-                    {option.description}
+                    {msg.sender === 'user' ? 'Вы' : 'Zaman AI'} • {msg.timestamp}
                   </p>
                 </div>
-                {option.badge && (
-                  <span
-                    className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
-                      isActive
-                        ? 'border-[#2D9A86]/40 bg-[#EEFE6D]/90 text-[#1F6F63]'
-                        : 'border-transparent bg-[#EEFE6D]/70 text-[#1F6F63] group-hover:border-[#2D9A86]/30'
-                    } dark:border-[#2D9A86]/40 dark:bg-gray-800/80 dark:text-[#EEFE6D]`}
-                  >
-                    {option.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
-
-      <main className="flex flex-1 flex-col">
-        <header className="flex flex-col gap-4 border-b border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setSelectedChat(null)}
-              className="border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
-            >
-              <ChevronLeft className="h-5 w-5" />
-              <span className="sr-only">Back to chat options</span>
-            </Button>
-            <div>
-              <h1 className="text-lg font-semibold text-gray-900 dark:text-white">{activeTitle}</h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400">{activeDescription}</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setMessages([])} disabled={messages.length === 0}>
-              <MessageCircle className="h-4 w-4" />
-              New Thread
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handlePlayLastResponse}
-              disabled={!canReplayAudio || isGeneratingAudio}
-            >
-                {isGeneratingAudio ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Generating audio...
-                  </>
-                ) : (
-                <>
-                  <Volume2 className="h-4 w-4" />
-                  Replay
-                </>
-              )}
-            </Button>
-          </div>
-        </header>
-
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex-1 space-y-6 overflow-y-auto px-4 py-6 md:px-8">
-            {renderTransactionList()}
-            {messages.length === 0 ? (
-              <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white/60 p-10 text-center text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400">
-                <MessageCircle className="h-10 w-10" />
-                <p className="mt-3 text-base font-medium">Start the conversation</p>
-                <p className="mt-1 text-sm">
-                  Ask ZamanAI to explain spending patterns, draft summaries, or search for insights.
-                </p>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {messages.map((msg) => (
-                  <div key={msg.id} className="flex flex-col gap-1">
-                    <div
-                      className={`max-w-2xl rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                        msg.sender === 'user'
-                          ? 'self-end bg-blue-600 text-white'
-                          : 'self-start bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-gray-100'
-                      }`}
-                    >
-                      <p>{msg.text}</p>
-                      {msg.attachment ? (
-                        <div className="mt-2 text-xs opacity-80">
-                          <span className="inline-flex items-center rounded bg-white/20 px-2 py-0.5">
-                            {msg.attachment.type.toUpperCase()} attachment
-                          </span>
-                        </div>
-                      ) : null}
-                    </div>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {msg.sender === 'user' ? 'You' : 'ZamanAI'} · {msg.timestamp}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="border-t border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
-            {error ? (
-              <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
-                {error}
-              </div>
-            ) : statusText ? (
-              <div className="mb-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>{statusText}</span>
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="hidden"
-                onChange={handleFileChange}
-                accept="audio/*,image/*,.pdf,.doc,.docx"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={handleAttachment}
-                disabled={disableComposer && !messages.length}
-              >
-                <Paperclip className="h-5 w-5" />
-                <span className="sr-only">Attach a file</span>
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={handleAttachment}
-                disabled={disableComposer && !messages.length}
-              >
-                <Camera className="h-5 w-5" />
-                <span className="sr-only">Capture media</span>
-              </Button>
-              <Button
-                type="button"
-                variant={isRecording ? 'destructive' : 'ghost'}
-                size="icon"
-                onClick={() => void toggleRecording()}
-                disabled={!isRecording && disableComposer}
-              >
-                {isRecording ? <Loader2 className="h-5 w-5 animate-spin" /> : <Mic className="h-5 w-5" />}
-                <span className="sr-only">{isRecording ? 'Stop recording' : 'Record voice message'}</span>
-              </Button>
-              <div className="flex-1 min-w-[180px]">
-              <Input
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                onKeyDown={handleInputKeyDown}
-                placeholder="Type your message..."
-                disabled={disableComposer}
-              />
-              </div>
-              <Button
-                type="button"
-                onClick={handleSend}
-                disabled={disableComposer || !message.trim()}
-                className="gap-2"
-              >
-                {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                Send
-              </Button>
-            </div>
-          </div>
-          <audio ref={audioPlayerRef} className="hidden" />
+            ))
+          )}
         </div>
-      </main>
+      </ScrollArea>
+
+      <div className="border-t border-gray-200 bg-white px-4 py-4 dark:border-gray-700 dark:bg-gray-800">
+        {error ? (
+          <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
+            {error}
+          </div>
+        ) : statusText ? (
+          <div className="mb-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>{statusText}</span>
+          </div>
+        ) : null}
+
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*,image/*,.pdf,.doc,.docx"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={handleAttachment}
+            className="rounded-lg p-2 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-700"
+            disabled={disableComposer && !messages.length}
+            aria-label="Прикрепить файл"
+          >
+            <Paperclip className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+          </button>
+          <button
+            type="button"
+            onClick={handleAttachment}
+            className="rounded-lg p-2 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-700"
+            disabled={disableComposer && !messages.length}
+            aria-label="Открыть камеру / медиа"
+          >
+            <Camera className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void toggleRecording()}
+            className={`rounded-lg p-2 transition ${
+              isRecording
+                ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
+                : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+            }`}
+            disabled={!isRecording && disableComposer}
+            aria-label={isRecording ? 'Остановить запись' : 'Начать запись'}
+          >
+            {isRecording ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Mic className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+            )}
+          </button>
+
+          <Input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={handleInputKeyDown}
+            placeholder={
+              selectedChat === 'financial-diary'
+                ? 'Спросите о последних тратах...'
+                : 'Введите сообщение...'
+            }
+            disabled={disableComposer}
+            className="flex-1 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          />
+
+          <Button
+            type="button"
+            onClick={handleSend}
+            disabled={disableComposer || !message.trim()}
+            className="bg-[#2D9A86] hover:bg-[#268976]"
+            aria-label="Отправить сообщение"
+          >
+            {isProcessing ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Send className="h-5 w-5" />
+            )}
+          </Button>
+        </div>
+      </div>
+
+      <audio ref={audioPlayerRef} className="hidden" />
     </div>
   );
 }
