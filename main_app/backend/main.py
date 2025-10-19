@@ -437,11 +437,11 @@ def build_chat_messages(request: ChatRequest) -> Tuple[List[dict], Dict[str, Lis
     retrieved_text = format_retrieved_for_prompt(retrieved)
     if retrieved_text:
 
-        
         retrieval_wrapper = (
     "You are given the following relevant rows from the database:\n"
-    "1) You must explicitly check all retrieved rows for rulings about whether the product or action is halal or haram. "
-    "2) When quoting the 'ответ/объяснение', put it in quotation marks and include the source chapter (column глава) in parentheses as in ({cite: глава}).\n"
+    "1) You must explicitly check all retrieved rows for rulings about whether the product or action is halal or haram.\n"
+    "2) When quoting the 'ответ/объяснение' from any row, you MUST include the actual value from the column 'глава' in parentheses immediately after the quote. "
+    "Never write ({cite: глава}) literally. For example: \"...\" {cite: SS(21) - 3/4/1}.\n"
     "3) Combine information from multiple rows to give a complete, well-rounded answer.\n"
     "4) Explain all key points clearly so a non-expert can understand, elaborating when necessary.\n"
     "5) Avoid omitting relevant details; do not focus on only one row.\n"
@@ -449,6 +449,9 @@ def build_chat_messages(request: ChatRequest) -> Tuple[List[dict], Dict[str, Lis
     "If no retrieved row explicitly mentions halal/haram, you may explain based on general knowledge, but always indicate that no direct citation was found.\n"
     + retrieved_text
 )
+
+        
+
 
 
         messages.append({"role": "system", "content": retrieval_wrapper})
@@ -739,11 +742,11 @@ def test_parse() -> dict:
     }
 
 
-
+''' 
 if __name__ == "__main__":
     print("Testing RAG + LLM pipeline...\n")
 
-    user_query = "можно ли торговать свининой?"
+    user_query = "халяльно ли обменять валюту на золото?"
 
     test_request = ChatRequest(message=user_query, history=[])
 
@@ -766,3 +769,4 @@ if __name__ == "__main__":
         print("💬 ZamanAI:", response)
     except Exception as e:
         print("Error while querying the model:", e)
+'''
