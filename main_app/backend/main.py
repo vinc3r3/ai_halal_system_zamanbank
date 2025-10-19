@@ -1,21 +1,40 @@
 import csv
 import io
-import os
-from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Dict
 import math
+import time
+import os
 import re
+import uuid
+import warnings
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple
+
+from dotenv import load_dotenv
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from gtts import gTTS
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, confloat
+
+try:
+    from llama_cloud import ChunkMode, ExtractConfig, ExtractMode, ExtractTarget
+    from llama_cloud.core.api_error import ApiError
+    from llama_cloud_services import LlamaExtract
+except ImportError:  # pragma: no cover - optional dependency
+    LlamaExtract = None  # type: ignore[assignment]
+    ExtractConfig = ExtractMode = ExtractTarget = ChunkMode = None  # type: ignore[assignment]
+    ApiError = Exception  # type: ignore[assignment]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+warnings.filterwarnings("ignore", message=r".*validate_default.*", category=UserWarning)
+
+load_dotenv()
 
 # Reuse the CSV assets that already ship with the project
 PRODUCTS_CSV = BASE_DIR / "zamanbank_products.csv"
@@ -30,6 +49,10 @@ class Settings(BaseModel):
     openai_api_key: str = Field(default="")
     openai_base_url: Optional[str] = Field(default=None)
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
+    llama_cloud_api_key: str = Field(default="")
+    llama_agent_name: str = Field(default="receipt-extractor")
+    llama_mode: str = Field(default="MULTIMODAL")
+    llama_prefer_ru: bool = Field(default=False)
 
 
 def get_settings() -> Settings:
@@ -41,6 +64,10 @@ def get_settings() -> Settings:
             for origin in os.getenv("BACKEND_CORS_ORIGINS", "*").split(",")
             if origin.strip()
         ],
+        llama_cloud_api_key=os.getenv("LLAMA_CLOUD_API_KEY", ""),
+        llama_agent_name=os.getenv("AGENT_NAME", "receipt-extractor"),
+        llama_mode=os.getenv("MODE", "MULTIMODAL"),
+        llama_prefer_ru=os.getenv("PREFER_RU", "false").lower() == "true",
     )
 
 
@@ -48,6 +75,9 @@ settings = get_settings()
 
 if not settings.openai_api_key:
     raise RuntimeError("OPENAI_API_KEY must be set before starting the backend service.")
+
+if settings.llama_cloud_api_key:
+    os.environ.setdefault("LLAMA_CLOUD_API_KEY", settings.llama_cloud_api_key)
 
 client_kwargs = {"api_key": settings.openai_api_key}
 if settings.openai_base_url:
@@ -195,6 +225,117 @@ def compute_embeddings(texts: List[str]) -> List[np.ndarray]:
     resp = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
     embeddings = [np.array(item.embedding, dtype=np.float32) for item in resp.data]
     return embeddings
+
+
+LLAMA_ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".heic"}
+LLAMA_MODE_CHOICES = {"FAST", "BALANCED", "MULTIMODAL"}
+
+_llama_extractor: Optional["LlamaExtract"] = None
+_llama_agents: Dict[Tuple[str, bool, str], object] = {}
+
+
+class ReceiptLineItem(BaseModel):
+    item: str
+    pcs: confloat(ge=0) = Field(default=1)
+    amount_money_per_pc: confloat(ge=0) = Field(default=0)
+    amount_money: confloat(ge=0) = Field(default=0)
+    category: str = Field(default="Other")
+    category_ru: str = Field(default="Other")
+
+
+class ReceiptDocument(BaseModel):
+    transaction_id: str
+    items: List[ReceiptLineItem]
+
+
+class ReceiptDiaryEntry(BaseModel):
+    transaction_id: str
+    receipt_transaction_id: str
+    item: str
+    amount: float
+    category: str
+    category_ru: str
+    quantity: int
+    filename: str
+
+
+class ReceiptExtractionResponse(BaseModel):
+    success: bool
+    entries: List[ReceiptDiaryEntry] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+
+
+def _ensure_llama_available() -> None:
+    if LlamaExtract is None or ExtractConfig is None or ExtractMode is None or ExtractTarget is None or ChunkMode is None:
+        raise RuntimeError(
+            "llama-cloud packages are not installed. Install 'llama-cloud' and 'llama-cloud-services' to enable receipt extraction."
+        )
+    if not settings.llama_cloud_api_key:
+        raise RuntimeError("LLAMA_CLOUD_API_KEY is not configured.")
+
+
+def _ensure_llama_extractor() -> "LlamaExtract":
+    _ensure_llama_available()
+    global _llama_extractor
+    if _llama_extractor is None:
+        _llama_extractor = LlamaExtract()  # type: ignore[call-arg]
+    return _llama_extractor
+
+
+def _unique_llama_agent_name(base: str) -> str:
+    return f"{base}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+
+
+def _build_llama_config(prefer_ru: bool, mode: str) -> "ExtractConfig":
+    _ensure_llama_available()
+    normalized_mode = mode.upper()
+    if normalized_mode not in LLAMA_MODE_CHOICES:
+        raise ValueError(f"mode must be one of {', '.join(sorted(LLAMA_MODE_CHOICES))}")
+    extract_mode = getattr(ExtractMode, normalized_mode)  # type: ignore[arg-type]
+    sys_prompt = (
+        "Documents are retail purchase receipts. Languages: Russian and English. "
+        "Goal: fill the schema exactly. Infer categories. Use pcs=1 if quantity not shown. "
+        "Use dot for decimals. Do not include currency symbols."
+        + (" Prefer Russian item names when present." if prefer_ru else "")
+    )
+    return ExtractConfig(  # type: ignore[call-arg]
+        extraction_mode=extract_mode,
+        extraction_target=ExtractTarget.PER_DOC,  # type: ignore[arg-type]
+        chunk_mode=ChunkMode.PAGE,  # type: ignore[arg-type]
+        high_resolution_mode=True,
+        system_prompt=sys_prompt,
+    )
+
+
+def _ensure_llama_agent(agent_name: str, prefer_ru: bool, mode: str, reuse: bool = True):
+    extractor = _ensure_llama_extractor()
+    cache_key = (agent_name, prefer_ru, mode.upper())
+    if reuse and cache_key in _llama_agents:
+        return _llama_agents[cache_key]
+
+    cfg = _build_llama_config(prefer_ru, mode)
+    try:
+        agent = extractor.create_agent(  # type: ignore[call-arg]
+            name=agent_name,
+            data_schema=ReceiptDocument,
+            config=cfg,
+        )
+    except ApiError as exc:  # type: ignore[misc]
+        status = getattr(exc, "status_code", None)
+        if status == 409 and reuse:
+            agent = extractor.get_agent_by_name(name=agent_name)  # type: ignore[call-arg]
+        elif status == 409 and not reuse:
+            agent = extractor.create_agent(  # type: ignore[call-arg]
+                name=_unique_llama_agent_name(agent_name),
+                data_schema=ReceiptDocument,
+                config=cfg,
+            )
+        else:
+            raise
+
+    if reuse:
+        _llama_agents[cache_key] = agent
+    return agent
 
 def index_csv_to_store(csv_path: Path, store: VectorStore, source_name: str, id_column: Optional[str] = None):
     if not csv_path.exists():
@@ -664,6 +805,107 @@ def save_transaction(transaction_data: dict) -> dict:
         }
     except Exception as exc:
         return {"success": False, "message": f"Error saving transaction: {exc}"}
+
+
+@app.post("/receipt/extract", response_model=ReceiptExtractionResponse)
+async def extract_receipt_endpoint(
+    files: List[UploadFile] = File(..., description="Receipt images or PDFs"),
+    prefer_ru: bool = Form(default=settings.llama_prefer_ru),
+    mode: str = Form(default=settings.llama_mode),
+    agent_name: str = Form(default=settings.llama_agent_name),
+    reuse: bool = Form(default=True),
+    save_to_diary: bool = Form(default=True),
+) -> ReceiptExtractionResponse:
+    try:
+        agent = _ensure_llama_agent(agent_name, prefer_ru, mode, reuse=reuse)
+    except Exception as exc:  # pragma: no cover - configuration/runtime issue
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    entries: List[ReceiptDiaryEntry] = []
+    errors: List[str] = []
+
+    for upload in files:
+        try:
+            filename = upload.filename or "receipt"
+            ext = Path(filename).suffix.lower()
+            if ext not in LLAMA_ALLOWED_EXTENSIONS:
+                errors.append(f"{filename}: unsupported extension '{ext or 'unknown'}'")
+                continue
+
+            try:
+                payload = await upload.read()
+                if not payload:
+                    errors.append(f"{filename}: no content provided")
+                    continue
+
+                from tempfile import NamedTemporaryFile
+
+                with NamedTemporaryFile(delete=True, suffix=ext) as tmp:
+                    tmp.write(payload)
+                    tmp.flush()
+                    result = agent.extract(tmp.name)  # type: ignore[attr-defined]
+            except ApiError as exc:  # type: ignore[misc]
+                status = getattr(exc, "status_code", None)
+                detail = getattr(exc, "message", None) or str(exc)
+                errors.append(f"{filename}: API error {status or ''} {detail}".strip())
+                continue
+            except Exception as exc:
+                errors.append(f"{filename}: {type(exc).__name__}: {exc}")
+                continue
+
+            raw_data = getattr(result, "data", result)
+            try:
+                receipt = ReceiptDocument.model_validate(raw_data)
+            except Exception as exc:
+                errors.append(f"{filename}: failed to validate response: {exc}")
+                continue
+
+            for item in receipt.items:
+                item_name = (item.item or "Unknown item").strip() or "Unknown item"
+                category = (item.category or "Other").strip() or "Other"
+                category_ru = (item.category_ru or category).strip() or category
+
+                quantity = int(round(float(item.pcs or 1)))
+                quantity = max(quantity, 1)
+
+                amount_value = float(item.amount_money or 0)
+                if amount_value <= 0 and item.amount_money_per_pc:
+                    amount_value = float(item.amount_money_per_pc) * quantity
+
+                if amount_value <= 0:
+                    errors.append(f"{filename}: item '{item_name}' has zero amount and was skipped")
+                    continue
+
+                transaction_id = receipt.transaction_id
+                if save_to_diary:
+                    try:
+                        transaction_id = append_transaction_to_csv(
+                            amount_value, item_name, category, category_ru, quantity
+                        )
+                    except Exception as exc:
+                        errors.append(f"{filename}: failed to save '{item_name}': {exc}")
+                        continue
+
+                entries.append(
+                    ReceiptDiaryEntry(
+                        transaction_id=transaction_id,
+                        receipt_transaction_id=receipt.transaction_id,
+                        item=item_name,
+                        amount=amount_value,
+                        category=category,
+                        category_ru=category_ru,
+                        quantity=quantity,
+                        filename=filename,
+                    )
+                )
+        finally:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+
+    success = bool(entries)
+    return ReceiptExtractionResponse(success=success, entries=entries, errors=errors)
 
 
 def merge_transactions() -> List[dict]:
