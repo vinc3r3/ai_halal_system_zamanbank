@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Mic,
@@ -20,8 +20,9 @@ import {
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { useTheme } from '../contexts/ThemeContext';
-import { enrichedTransactions, formatCurrency, getCategoryColor } from '../data/financialData';
+import { createCategoryColorLookup, formatCurrency, getCategoryColor } from '../data/financialData';
 
 // ---------- Types ----------
 interface ChatOption {
@@ -31,12 +32,35 @@ interface ChatOption {
   icon: React.ReactNode;
   badge?: string;
 }
+
+interface CitationInfo {
+  id?: string;
+  chapter?: string;
+  topic?: string;
+  explanation?: string;
+  source?: string;
+  type?: string;
+}
+
 interface Message {
   id: string;
   text: string;
   sender: 'user' | 'ai';
   timestamp: string;
+  citations?: CitationInfo[];
   attachment?: { type: 'image' | 'audio' | 'file'; url: string };
+}
+
+interface DiaryTransaction {
+  transactionId: string;
+  item: string | null;
+  amount: number;
+  category: string | null;
+  categoryRu: string | null;
+  date: string;
+  time: string;
+  customerId: string | null;
+  quantity: number | null;
 }
 
 // ---------- Style options ----------
@@ -69,6 +93,41 @@ const isHexColorLight = (hex: string): boolean => {
   return luminance > 0.6;
 };
 
+const toNumber = (value: unknown): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const sanitized = value
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/\u00a0/g, '')
+      .replace(/,/g, '.')
+      .replace(/[^\d.-]/g, '');
+    const parsed = Number(sanitized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const toQuantity = (value: unknown): number | null => {
+  const parsed = Math.round(toNumber(value));
+  return parsed > 0 ? parsed : null;
+};
+
+const normalizeText = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+};
+
+const parseTimestamp = (date: string | null, time: string | null): number => {
+  const normalizedDate = date ? date.trim() : '';
+  const normalizedTime = time ? time.trim() : '';
+  if (!normalizedDate && !normalizedTime) return 0;
+  const composed = `${normalizedDate} ${normalizedTime}`.trim();
+  const timestamp = Date.parse(composed);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+};
+
 // ---------- Fixed strings ----------
 const GENERAL_ERROR = 'Не удалось связаться с Zaman AI. Повторите попытку позже.';
 const TRANSCRIPTION_ERROR = 'Не удалось распознать голосовое сообщение. Попробуйте ещё раз.';
@@ -84,6 +143,48 @@ const extractChatReply = (payload: unknown): string | null => {
   for (const c of candidates) if (typeof c === 'string' && c.trim()) return c.trim();
   return null;
 };
+
+const parseCitationsFromPayload = (payload: unknown): CitationInfo[] => {
+  if (!payload || typeof payload !== 'object') return [];
+  const citations = (payload as Record<string, unknown>).citations;
+  if (!Array.isArray(citations)) return [];
+
+  return citations
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const record = entry as Record<string, unknown>;
+      const chapter = typeof record.chapter === 'string' ? record.chapter.trim() : undefined;
+      const explanation = typeof record.explanation === 'string' ? record.explanation.trim() : undefined;
+      const topic = typeof record.topic === 'string' ? record.topic.trim() : undefined;
+      const id = typeof record.id === 'string' ? record.id.trim() : undefined;
+      const source = typeof record.source === 'string' ? record.source : undefined;
+      const type = typeof record.type === 'string' ? record.type : undefined;
+
+      if (!chapter && !id && !explanation && !topic) return null;
+
+      return {
+        id,
+        chapter,
+        topic,
+        explanation,
+        source,
+        type,
+      } as CitationInfo;
+    })
+    .filter((entry): entry is CitationInfo => Boolean(entry));
+};
+
+const normalizeCitationKey = (value: string): string =>
+  value
+    .replace(/\u00a0/g, ' ')
+    .replace(/[–—]/g, '-')
+    .replace(/^[\s"'«»„”“()]+|[\s"'«»„”“)]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.,;:]+$/g, '')
+    .trim()
+    .toLowerCase();
+
+const CITATION_PATTERN = /\(\s*{cite:\s*([^}]+)}\s*\)|\(([^()]+)\)/g;
 
 const decodeBase64Audio = (base64Audio: string): Uint8Array => {
   const binary = atob(base64Audio);
@@ -140,7 +241,7 @@ export function ChatbotTab() {
   const [selectedTransaction, setSelectedTransaction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isParsingText, setIsParsingText] = useState(false);
-  const [parsedTransactions, setParsedTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<DiaryTransaction[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -151,16 +252,106 @@ export function ChatbotTab() {
   const audioSourceRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
 
-  const { theme } = useTheme(); // (kept for your context API; not required below but harmless)
+  const { theme } = useTheme(); // preserved
 
   // Function to scroll to bottom
   const scrollToBottom = () => {
     if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null;
       if (scrollContainer) {
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
       }
     }
+  };
+
+  const buildCitationMap = (citations?: CitationInfo[]) => {
+    const map = new Map<string, { citation: CitationInfo; label: string }>();
+    if (!citations) return map;
+
+    citations.forEach((citation) => {
+      if (!citation) return;
+      const labels = [citation.chapter, citation.id].filter((value): value is string => Boolean(value && value.trim()));
+      labels.forEach((label) => {
+        const normalized = normalizeCitationKey(label);
+        if (!normalized || map.has(normalized)) return;
+        const displayLabel = (citation.chapter ?? label).trim() || label.trim();
+        map.set(normalized, { citation, label: displayLabel });
+      });
+    });
+
+    return map;
+  };
+
+  const renderCitationBadge = (citation: CitationInfo, displayLabel: string, idx: number) => (
+    <Tooltip key={`citation-${displayLabel}-${idx}`}>
+      <TooltipTrigger asChild>
+        <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-[#2D9A86]/40 bg-[#2D9A86]/10 px-2 py-0.5 text-xs font-medium text-[#2D9A86]">
+          <Tag className="h-3 w-3" />
+          {displayLabel}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
+        {citation.topic ? <p className="mb-1 font-semibold">{citation.topic}</p> : null}
+        <p>{citation.explanation ?? 'Комментарий отсутствует в источнике.'}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+
+  const transformMessageWithCitations = (text: string, citations?: CitationInfo[]): (string | JSX.Element)[] => {
+    if (!text) return [];
+    const citationMap = buildCitationMap(citations);
+    if (!citationMap.size) return [text];
+
+    const nodes: (string | JSX.Element)[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let citationIndex = 0;
+    CITATION_PATTERN.lastIndex = 0;
+
+    while ((match = CITATION_PATTERN.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        nodes.push(text.slice(lastIndex, match.index));
+      }
+
+      const rawLabel = (match[1] ?? match[2] ?? '').trim();
+      const normalized = normalizeCitationKey(rawLabel);
+      const entry = normalized ? citationMap.get(normalized) : undefined;
+
+      if (entry) {
+        nodes.push(renderCitationBadge(entry.citation, entry.label || rawLabel, citationIndex));
+        citationIndex += 1;
+      } else {
+        nodes.push(match[0]);
+      }
+
+      lastIndex = CITATION_PATTERN.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+      nodes.push(text.slice(lastIndex));
+    }
+
+    return nodes;
+  };
+
+  const renderMessageContent = (msg: Message) => {
+    const baseClass = 'whitespace-pre-wrap leading-relaxed';
+    if (msg.sender !== 'ai') {
+      return <p className={baseClass}>{msg.text}</p>;
+    }
+
+    const segments = transformMessageWithCitations(msg.text, msg.citations);
+    if (!segments.length) {
+      return <p className={`${baseClass} text-sm`}>{msg.text}</p>;
+    }
+
+    return (
+      <div className={`${baseClass} text-sm`}>
+        {segments.map((segment, idx) =>
+          typeof segment === 'string' ? <span key={`ai-text-${msg.id}-${idx}`}>{segment}</span> : segment
+        )}
+      </div>
+    );
   };
 
   // cleanup
@@ -187,47 +378,63 @@ export function ChatbotTab() {
   // Load parsed transactions from CSV when financial diary is opened
   useEffect(() => {
     if (selectedChat === 'financial-diary') {
-      loadParsedTransactions();
+      void loadTransactions();
     }
   }, [selectedChat]);
 
   // Auto-scroll to bottom when financial diary is opened or new transactions are added
   useEffect(() => {
     if (selectedChat === 'financial-diary') {
-      // Small delay to ensure DOM is updated
       setTimeout(scrollToBottom, 100);
     }
-  }, [selectedChat, parsedTransactions]);
+  }, [selectedChat, transactions]);
 
   // Load parsed transactions from backend
-  const loadParsedTransactions = async () => {
+  const loadTransactions = async () => {
     try {
-      console.log('📥 Loading parsed transactions from CSV...');
       const response = await fetch(`${API_BASE_URL}/get-parsed-transactions`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('📥 Loaded transactions:', data.transactions);
-        
-        // Convert CSV data to transaction format
-        const transactions = data.transactions.map((t: any) => ({
-          transactionId: t.transaction_id,
-          item: t.item,
-          amount: parseFloat(t.amount_money),
-          category: t.category_ru,
-          date: t.date,
-          time: t.time,
-          balance: null,
-          quantity: parseInt(t.pcs) || 1
-        }));
-        
-        setParsedTransactions(transactions);
-        console.log('✅ Parsed transactions loaded:', transactions);
-      } else {
-        console.error('❌ Failed to load transactions:', response.status);
+      if (!response.ok) {
+        console.error('⚠️ Failed to load transactions:', response.status);
+        return;
+      }
+
+      const payload = await response.json();
+      const mapped: DiaryTransaction[] = (payload?.transactions ?? [])
+        .map((raw: any) => {
+          const transactionId = normalizeText(raw?.transaction_id) ?? '';
+          if (!transactionId) return null;
+
+          const item = normalizeText(raw?.item);
+          const category = normalizeText(raw?.category);
+          const categoryRu = normalizeText(raw?.category_ru);
+          const date = normalizeText(raw?.date) ?? '';
+          const time = normalizeText(raw?.time) ?? '';
+          const customerId = normalizeText(raw?.transactioner_id);
+          const amount = toNumber(raw?.amount_money ?? raw?.amount);
+          const quantity = toQuantity(raw?.pcs ?? raw?.quantity);
+
+          return {
+            transactionId,
+            item,
+            amount,
+            category,
+            categoryRu,
+            date,
+            time,
+            customerId,
+            quantity,
+          } as DiaryTransaction;
+        })
+        .filter(Boolean) as DiaryTransaction[];
+
+      mapped.sort((a, b) => parseTimestamp(b.date, b.time) - parseTimestamp(a.date, a.time));
+      createCategoryColorLookup(mapped.map((tx) => tx.category ?? '').filter(Boolean));
+
+      if (isMountedRef.current) {
+        setTransactions(mapped);
       }
     } catch (error) {
-      console.error('💥 Error loading transactions:', error);
+      console.error('❌ Error loading transactions:', error);
     }
   };
 
@@ -245,50 +452,42 @@ export function ChatbotTab() {
     setIsProcessing(true);
 
     try {
-      console.log('Sending message to API:', { message: trimmed, history: mapHistory(messages) });
-      console.log('API URL:', `${API_BASE_URL}/chat`);
-      
       const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: trimmed, history: mapHistory(messages) }),
       });
 
-      console.log('API Response status:', res.status);
-      console.log('API Response headers:', res.headers);
-
       if (!res.ok) {
         if (res.status === 404) throw new Error(VOICE_UNAVAILABLE_ERROR);
         let detail = 'Zaman AI сейчас недоступен. Попробуйте позже.';
         try {
           const body = await res.json();
-          console.log('Error response body:', body);
-          if (typeof body?.detail === 'string') detail = body.detail;
-        } catch (parseErr) {
-          console.log('Failed to parse error response:', parseErr);
-        }
+          if (typeof (body as any)?.detail === 'string') detail = (body as any).detail;
+        } catch {}
         throw new Error(detail);
       }
 
       const data = await res.json();
-      console.log('API Response data:', data);
       const aiText = extractChatReply(data);
-      if (!aiText) {
-        console.log('No AI text extracted from response:', data);
-        throw new Error('Неожиданный ответ от Zaman AI.');
-      }
-      const aiMessage: Message = { id: `${Date.now()}-ai`, text: aiText, sender: 'ai', timestamp: formatTimestamp() };
+      if (!aiText) throw new Error('Неожиданный ответ от Zaman AI.');
+      const citations = parseCitationsFromPayload(data);
+      const aiMessage: Message = {
+        id: `${Date.now()}-ai`,
+        text: aiText,
+        sender: 'ai',
+        timestamp: formatTimestamp(),
+        citations: citations.length ? citations : undefined,
+      };
       if (isMountedRef.current) setMessages((prev) => [...prev, aiMessage]);
     } catch (err) {
-      console.error('Error in submitMessage:', err);
-      
-      // Provide a fallback response when API is not available
+      // Fallback message if fetch failed (e.g., CORS/offline)
       if (err instanceof Error && (err.message.includes('fetch') || err.message.includes('Failed to fetch'))) {
-        const fallbackMessage: Message = { 
-          id: `${Date.now()}-ai-fallback`, 
-          text: 'Извините, Zaman AI временно недоступен. Пожалуйста, попробуйте позже или обратитесь в службу поддержки.', 
-          sender: 'ai', 
-          timestamp: formatTimestamp() 
+        const fallbackMessage: Message = {
+          id: `${Date.now()}-ai-fallback`,
+          text: 'Извините, Zaman AI временно недоступен. Пожалуйста, попробуйте позже или обратитесь в службу поддержки.',
+          sender: 'ai',
+          timestamp: formatTimestamp(),
         };
         if (isMountedRef.current) setMessages((prev) => [...prev, fallbackMessage]);
       } else {
@@ -303,8 +502,6 @@ export function ChatbotTab() {
     const trimmed = message.trim();
     if (!trimmed) return;
     setMessage('');
-    
-    // For financial diary, handle transaction addition locally
     if (selectedChat === 'financial-diary') {
       handleFinancialDiaryMessage(trimmed);
     } else {
@@ -312,132 +509,86 @@ export function ChatbotTab() {
     }
   };
 
+  // Heuristic parser (kept if you want local parsing later; not used by API flow)
   const parseFinancialText = (text: string) => {
-    // Russian financial text parsing
     const lowerText = text.toLowerCase();
-    
-    // Extract amount - look for various patterns
     const amountPatterns = [
-      /(\d+(?:\.\d{2})?)\s*₸/,  // "450 ₸"
-      /(\d+(?:\.\d{2})?)\s*тенге/,  // "450 тенге"
-      /(\d+(?:\.\d{2})?)\s*тг/,  // "450 тг"
-      /(\d+(?:\.\d{2})?)\s*за/,  // "450 за"
-      /(\d+(?:\.\d{2})?)\s*руб/,  // "450 руб"
-      /(\d+(?:\.\d{2})?)\s*₽/,  // "450 ₽"
-      /(\d+(?:\.\d{2})?)\s*долларов?/,  // "450 долларов"
-      /(\d+(?:\.\d{2})?)\s*евро/,  // "450 евро"
-      /(\d+(?:\.\d{2})?)\s*/,  // just numbers
+      /(\d+(?:[.,]\d{1,2})?)\s*₸/,
+      /(\d+(?:[.,]\d{1,2})?)\s*тенге/,
+      /(\d+(?:[.,]\d{1,2})?)\s*тг/,
+      /(\d+(?:[.,]\d{1,2})?)\s*руб/,
+      /(\d+(?:[.,]\d{1,2})?)\s*₽/,
+      /(\d+(?:[.,]\d{1,2})?)\s*долларов?/,
+      /(\d+(?:[.,]\d{1,2})?)\s*евро/,
+      /(\d+(?:[.,]\d{1,2})?)/,
     ];
-    
     let amount = 0;
-    for (const pattern of amountPatterns) {
-      const match = lowerText.match(pattern);
-      if (match) {
-        amount = parseFloat(match[1]);
-        break;
-      }
+    for (const p of amountPatterns) {
+      const m = lowerText.match(p);
+      if (m) { amount = Number(m[1].replace(',', '.')); break; }
     }
-    
-    // Extract item/product name
+
     const itemPatterns = [
-      /(?:купил|купила|потратил|потратила|заплатил|заплатила|потратил|потратила)\s+(.+?)\s+(?:за|на|в)/,
+      /(?:купил|купила|потратил|потратила|заплатил|заплатила)\s+(.+?)\s+(?:за|на|в)/,
       /(?:покупка|расход|трата)\s+(.+?)\s+(?:за|на|в)/,
-      /(?:потратил|потратила)\s+(.+?)\s+(?:за|на|в)/,
       /(?:я|мы)\s+(?:купил|купила|потратил|потратила|заплатил|заплатила)\s+(.+?)\s+(?:за|на|в)/,
     ];
-    
     let item = '';
-    for (const pattern of itemPatterns) {
-      const match = lowerText.match(pattern);
-      if (match) {
-        item = match[1].trim();
-        break;
-      }
+    for (const p of itemPatterns) {
+      const m = lowerText.match(p);
+      if (m) { item = m[1].trim(); break; }
     }
-    
-    // If no specific pattern found, try to extract from common structures
     if (!item && amount > 0) {
       const words = text.split(/\s+/);
-      const amountIndex = words.findIndex(word => 
-        word.includes(amount.toString()) || 
-        word.includes('₸') || 
-        word.includes('тенге') || 
-        word.includes('тг') ||
-        word.includes('руб') ||
-        word.includes('₽')
+      const idx = words.findIndex(w =>
+        w.includes(String(amount)) || /₸|тенге|тг|руб|₽/i.test(w)
       );
-      
-      if (amountIndex > 0) {
-        // Take words before the amount as the item
-        item = words.slice(0, amountIndex).join(' ')
-          .replace(/[купил|купила|потратил|потратила|заплатил|заплатила|я|мы]/gi, '')
+      if (idx > 0) {
+        item = words.slice(0, idx).join(' ')
+          .replace(/\b(купил|купила|потратил|потратила|заплатил|заплатила|я|мы)\b/gi, '')
           .trim();
       }
     }
-    
-    // If still no item, try to extract from the whole text
     if (!item && amount > 0) {
-      // Remove amount and currency from text
-      const cleanText = text
-        .replace(/\d+(?:\.\d{2})?\s*[₸₽]/, '')
-        .replace(/\d+(?:\.\d{2})?\s*(?:тенге|тг|руб|долларов?|евро)/, '')
-        .replace(/[купил|купила|потратил|потратила|заплатил|заплатила|я|мы|за|на|в|сегодня|вчера]/gi, '')
+      const clean = text
+        .replace(/\d+(?:[.,]\d{1,2})?\s*[₸₽]/gi, '')
+        .replace(/\d+(?:[.,]\d{1,2})?\s*(тенге|тг|руб|долларов?|евро)/gi, '')
+        .replace(/\b(купил|купила|потратил|потратила|заплатил|заплатила|я|мы|за|на|в|сегодня|вчера)\b/gi, '')
         .trim();
-      
-      if (cleanText.length > 0) {
-        item = cleanText;
-      }
+      if (clean) item = clean;
     }
-    
-    // Categorize based on keywords
-    const categorizeItem = (itemName: string) => {
-      const itemLower = itemName.toLowerCase();
-      
-      const categories = {
-        'Продукты': ['еда', 'продукты', 'еду', 'кока', 'кола', 'пепси', 'хлеб', 'молоко', 'мясо', 'рыба', 'овощи', 'фрукты', 'магазин', 'супермаркет', 'продуктовый', 'кофе', 'чай', 'сок', 'вода', 'напиток', 'напитки'],
-        'Транспорт': ['такси', 'автобус', 'метро', 'транспорт', 'бензин', 'топливо', 'парковка', 'проезд', 'машина', 'автомобиль'],
-        'Утилиты': ['электричество', 'свет', 'газ', 'вода', 'отопление', 'интернет', 'телефон', 'связь', 'коммунальные', 'услуги'],
-        'Развлечения': ['кино', 'театр', 'кафе', 'ресторан', 'клуб', 'игра', 'игры', 'развлечения', 'концерт', 'музей'],
-        'Здоровье': ['лекарства', 'аптека', 'врач', 'больница', 'медицина', 'здоровье', 'лечение', 'анализы'],
-        'Одежда': ['одежда', 'обувь', 'магазин одежды', 'шопинг', 'платье', 'рубашка', 'джинсы'],
-        'Образование': ['книги', 'курсы', 'обучение', 'школа', 'университет', 'учебники', 'образование'],
-        'Другое': []
-      };
-      
-      for (const [category, keywords] of Object.entries(categories)) {
-        if (keywords.some(keyword => itemLower.includes(keyword))) {
-          return category;
-        }
-      }
-      
-      return 'Другое';
+
+    const categories: Record<string, string[]> = {
+      'Продукты': ['еда', 'продукты', 'еду', 'кока', 'кола', 'пепси', 'хлеб', 'молоко', 'мясо', 'рыба', 'овощи', 'фрукты', 'магазин', 'супермаркет', 'продуктовый', 'кофе', 'чай', 'сок', 'вода', 'напиток', 'напитки'],
+      'Транспорт': ['такси', 'автобус', 'метро', 'транспорт', 'бензин', 'топливо', 'парковка', 'проезд', 'машина', 'автомобиль'],
+      'Утилиты': ['электричество', 'свет', 'газ', 'вода', 'отопление', 'интернет', 'телефон', 'связь', 'коммунальные', 'услуги'],
+      'Развлечения': ['кино', 'театр', 'кафе', 'ресторан', 'клуб', 'игра', 'игры', 'развлечения', 'концерт', 'музей'],
+      'Здоровье': ['лекарства', 'аптека', 'врач', 'больница', 'медицина', 'здоровье', 'лечение', 'анализы'],
+      'Одежда': ['одежда', 'обувь', 'магазин одежды', 'шопинг', 'платье', 'рубашка', 'джинсы'],
+      'Образование': ['книги', 'курсы', 'обучение', 'школа', 'университет', 'учебники', 'образование'],
+      'Другое': [],
     };
-    
-    const category = categorizeItem(item);
-    
-    return {
-      amount,
-      item: item || 'Покупка',
-      category,
-      success: amount > 0
-    };
+    const itemLower = item.toLowerCase();
+    let category = 'Другое';
+    for (const [cat, kws] of Object.entries(categories)) {
+      if (kws.some(k => itemLower.includes(k))) { category = cat; break; }
+    }
+
+    return { amount, item: item || 'Покупка', category, success: amount > 0 };
   };
 
   const handleFinancialDiaryMessage = async (content: string) => {
     console.log('🔍 Processing financial diary message:', content);
     setIsParsingText(true);
-    
-    // First, add the user's message to the chat
-    const userMessage: Message = { 
-      id: `user-${Date.now()}`, 
-      text: content, 
-      sender: 'user', 
-      timestamp: formatTimestamp() 
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      text: content,
+      sender: 'user',
+      timestamp: formatTimestamp(),
     };
     setMessages((prev) => [...prev, userMessage]);
-    console.log('✅ User message added to chat');
-    
-    // Show processing indicator
+
     const processingMessage: Message = {
       id: `processing-${Date.now()}`,
       text: 'Обрабатываю ваш запрос...',
@@ -445,122 +596,88 @@ export function ChatbotTab() {
       timestamp: formatTimestamp(),
     };
     setMessages((prev) => [...prev, processingMessage]);
-    console.log('⏳ Processing indicator shown');
-    
+
     try {
-      console.log('🌐 Calling API:', `${API_BASE_URL}/parse-text`);
-      console.log('📤 Request payload:', { text: content });
-      
-      // Call the API to parse the text
       const response = await fetch(`${API_BASE_URL}/parse-text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: content }),
       });
 
-      console.log('📡 API Response status:', response.status);
-      console.log('📡 API Response headers:', Object.fromEntries(response.headers.entries()));
-
-      // Remove processing message
-      setMessages((prev) => prev.filter(msg => msg.id !== processingMessage.id));
-      console.log('🗑️ Processing message removed');
+      setMessages((prev) => prev.filter((m) => m.id !== processingMessage.id));
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('❌ API request failed:', response.status, errorText);
         throw new Error(`API request failed: ${response.status} - ${errorText}`);
       }
 
       const parsed = await response.json();
-      console.log('📥 API Response data:', parsed);
-      
+
       if (parsed.success) {
-        console.log('✅ Parsing successful:', parsed);
-        
-        // Create a new transaction object
-        const newTransaction = {
+        const newTransaction: DiaryTransaction & { balance: number | null } = {
           transactionId: `parsed-${Date.now()}`,
           item: parsed.item,
           amount: parsed.amount,
-          category: parsed.category_ru,
+          category: parsed.category,      // keep original key if backend sends it
+          categoryRu: parsed.category_ru, // RU label
           date: new Date().toLocaleDateString('ru-RU'),
           time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          customerId: null,
+          quantity: 1,
           balance: null,
-          quantity: 1
         };
-        
-        // Save transaction to CSV file
+
         try {
-          console.log('💾 Saving transaction to CSV...');
           const saveResponse = await fetch(`${API_BASE_URL}/save-transaction`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(newTransaction),
           });
-          
+
           if (saveResponse.ok) {
-            const saveData = await saveResponse.json();
-            console.log('✅ Transaction saved to CSV:', saveData);
-            
-            // Add to parsed transactions
-            setParsedTransactions((prev) => [newTransaction, ...prev]);
-            console.log('✅ Transaction added to parsed list:', newTransaction);
-            
-            // Scroll to bottom after adding transaction
+            await saveResponse.json();
+            setTransactions((prev) => [newTransaction, ...prev]); // ✅ fixed: use setTransactions
             setTimeout(scrollToBottom, 200);
           } else {
-            console.error('❌ Failed to save transaction to CSV:', saveResponse.status);
             throw new Error('Failed to save transaction');
           }
-        } catch (saveError) {
-          console.error('💥 Error saving transaction:', saveError);
-          throw saveError;
+        } catch (saveErr) {
+          console.error('Error saving transaction:', saveErr);
+          throw saveErr;
         }
-        
-        // Show success message
-        const successMessage = {
+
+        const successMessage: Message = {
           id: `success-${Date.now()}`,
-          text: `✅ Добавлено: ${parsed.item} за ${parsed.amount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₸`,
-          sender: 'ai' as const,
+          text: `✓ Добавлено: ${parsed.item} за ${Number(parsed.amount).toLocaleString('ru-RU', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })} ₸`,
+          sender: 'ai',
           timestamp: formatTimestamp(),
         };
-        
         setMessages((prev) => [...prev, successMessage]);
-        console.log('✅ Success message added to chat');
       } else {
-        console.log('❌ Parsing failed:', parsed.error_message);
-        
-        // If parsing failed, show error
-        const errorMessage = {
+        const errorMessage: Message = {
           id: `error-${Date.now()}`,
-          text: parsed.error_message || 'Не удалось распознать сумму или товар в вашем сообщении. Попробуйте написать в формате: "купил хлеб за 200 тенге" или "потратил 500 ₸ на кофе"',
-          sender: 'ai' as const,
+          text:
+            parsed.error_message ||
+            'Не удалось распознать сумму или товар в вашем сообщении. Попробуйте написать в формате: "купил хлеб за 200 тенге" или "потратил 500 ₸ на кофе".',
+          sender: 'ai',
           timestamp: formatTimestamp(),
         };
-        
         setMessages((prev) => [...prev, errorMessage]);
-        console.log('❌ Error message added to chat');
       }
     } catch (error) {
-      console.error('💥 Error in handleFinancialDiaryMessage:', error);
-      
-      // Remove processing message
-      setMessages((prev) => prev.filter(msg => msg.id !== processingMessage.id));
-      console.log('🗑️ Processing message removed after error');
-      
-      // Show fallback error with more details
-      const errorMessage = {
+      setMessages((prev) => prev.filter((m) => m.id !== processingMessage.id));
+      const errorMessage: Message = {
         id: `error-${Date.now()}`,
         text: `Ошибка: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}. Проверьте консоль для подробностей.`,
-        sender: 'ai' as const,
+        sender: 'ai',
         timestamp: formatTimestamp(),
       };
-      
       setMessages((prev) => [...prev, errorMessage]);
-      console.log('❌ Fallback error message added to chat');
     } finally {
       setIsParsingText(false);
-      console.log('🏁 Parsing completed');
     }
   };
 
@@ -571,7 +688,7 @@ export function ChatbotTab() {
   };
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) console.log('File selected:', file); // hook your upload pipeline here
+    if (file) console.log('File selected:', file);
   };
 
   // -------- mic / STT --------
@@ -596,7 +713,7 @@ export function ChatbotTab() {
         let detail = 'Zaman AI сейчас недоступен. Попробуйте позже.';
         try {
           const body = await res.json();
-          if (typeof body?.detail === 'string') detail = body.detail;
+          if (typeof (body as any)?.detail === 'string') detail = (body as any).detail;
         } catch {}
         throw new Error(detail);
       }
@@ -605,7 +722,6 @@ export function ChatbotTab() {
       if (text) void submitMessage(text);
       else setError(TRANSCRIPTION_ERROR);
     } catch (err) {
-      console.error(err);
       if (isMountedRef.current) setError(err instanceof Error ? err.message : GENERAL_ERROR);
     } finally {
       if (isMountedRef.current) setIsTranscribing(false);
@@ -652,7 +768,6 @@ export function ChatbotTab() {
       setError(null);
       setIsRecording(true);
     } catch (err) {
-      console.error(err);
       stopMediaStream();
       setError(MICROPHONE_ERROR);
     }
@@ -679,7 +794,6 @@ export function ChatbotTab() {
       player.src = audioUrl;
       await player.play();
     } catch (err) {
-      console.error(err);
       if (isMountedRef.current) setError(err instanceof Error ? err.message : AUDIO_ERROR);
     } finally {
       if (isMountedRef.current) setIsGeneratingAudio(false);
@@ -750,7 +864,7 @@ export function ChatbotTab() {
     );
   }
 
-  // ---------- Active chat screen (styled + functional) ----------
+  // ---------- Active chat screen ----------
   const currentChat = chatOptions.find((o) => o.id === selectedChat);
   const canReplayAudio = messages.some((m) => m.sender === 'ai');
   const disableComposer = isProcessing || isTranscribing || isParsingText;
@@ -771,8 +885,7 @@ export function ChatbotTab() {
             <p className="text-xs text-gray-600 dark:text-gray-400">{currentChat?.description}</p>
           </div>
 
-          {/* Scroll to bottom button for financial diary */}
-          {selectedChat === 'financial-diary' && (parsedTransactions.length > 0 || enrichedTransactions.length > 0) && (
+          {selectedChat === 'financial-diary' && transactions.length > 0 && (
             <button
               type="button"
               onClick={scrollToBottom}
@@ -783,7 +896,6 @@ export function ChatbotTab() {
             </button>
           )}
 
-          {/* Replay last AI message (TTS) */}
           <button
             type="button"
             onClick={handlePlayLastResponse}
@@ -809,191 +921,181 @@ export function ChatbotTab() {
       <div className="flex-1 overflow-hidden">
         <ScrollArea ref={scrollAreaRef} className="h-full px-4">
           <div className="py-4 space-y-4 pb-6">
-          {selectedChat === 'financial-diary' ? (
-            (enrichedTransactions.length > 0 || parsedTransactions.length > 0 || messages.length > 0) ? (
-              <>
-                {/* Show transactions */}
-                {[...parsedTransactions, ...enrichedTransactions].slice(0, 8).reverse().map((t) => {
-                  const iconLetter = (t.item?.trim()?.charAt(0) || 'T').toUpperCase();
-                  const accentColor = getCategoryColor(t.category);
-                  const isAccentLight = isHexColorLight(accentColor);
-                  const iconTextClass = isAccentLight ? 'text-gray-900' : 'text-white';
-                  const categoryTextClass = isAccentLight ? 'text-gray-900' : 'text-white';
+            {selectedChat === 'financial-diary' ? (
+              (transactions.length > 0 || messages.length > 0) ? (
+                <>
+                  {transactions.map((t) => {
+                    const itemName = t.item && t.item.toLowerCase() !== 'unknown item' ? t.item : 'Без названия';
+                    const categoryKey = t.category ?? undefined;
+                    const iconLetter = (itemName?.trim()?.charAt(0) || 'T').toUpperCase();
+                    const accentColor = getCategoryColor(categoryKey);
+                    const isAccentLight = isHexColorLight(accentColor);
+                    const iconTextClass = isAccentLight ? 'text-gray-900' : 'text-white';
+                    const categoryTextClass = isAccentLight ? 'text-gray-900' : 'text-white';
 
-                  const showActionRow = selectedTransaction === t.transactionId;
-                  const hasCategory = Boolean(t.category);
+                    const showActionRow = selectedTransaction === t.transactionId;
+                    const hasCategory =
+                      Boolean(t.category && t.category !== 'Other') || Boolean(t.categoryRu && t.categoryRu !== 'Прочее');
+                    const hasItem = Boolean(t.item && t.item.toLowerCase() !== 'unknown item');
+                    const categoryLabel = hasCategory ? t.categoryRu ?? t.category ?? '' : null;
 
-                  return (
-                    <div key={t.transactionId} className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
-                      <div className="flex items-start gap-3">
-                        <div
-                          className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
-                          style={{ backgroundColor: accentColor }}
-                        >
-                          <span className={`text-lg ${iconTextClass}`}>{iconLetter}</span>
-                        </div>
+                    return (
+                      <div key={t.transactionId} className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+                        <div className="flex items-start gap-3">
+                          <div
+                            className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
+                            style={{ backgroundColor: accentColor }}
+                          >
+                            <span className={`text-lg ${iconTextClass}`}>{iconLetter}</span>
+                          </div>
 
-                        <div className="flex-1">
-                          <div className="flex justify-between items-start mb-1">
-                            <div>
-                              <div className="font-medium dark:text-white">{t.item || 'Покупка'}</div>
-                              <div className="text-sm text-gray-600 dark:text-gray-400">
-                                Сумма: {formatCurrency(t.amount)}
-                              </div>
-                              {typeof t.balance === 'number' ? (
-                                <div className="text-xs text-gray-500 dark:text-gray-500">
-                                  Доступно: {t.balance.toLocaleString()} ₸
+                          <div className="flex-1">
+                            <div className="flex justify-between items-start mb-1">
+                              <div>
+                                <div className="font-medium dark:text-white">{itemName || 'Покупка'}</div>
+                                <div className="text-sm text-gray-600 dark:text-gray-400">
+                                  Сумма: {formatCurrency(t.amount)}
                                 </div>
-                              ) : null}
+                              </div>
+                              <div className="text-right text-xs text-gray-400 dark:text-gray-500">
+                                {t.date}
+                                <br />
+                                {t.time}
+                              </div>
                             </div>
-                            <div className="text-right text-xs text-gray-400 dark:text-gray-500">
-                              {t.date}
-                              <br />
-                              {t.time}
-                            </div>
+                            {hasCategory && categoryLabel ? (
+                              <div
+                                className={`mt-2 inline-block px-3 py-1 rounded-full text-xs ${categoryTextClass}`}
+                                style={{ backgroundColor: accentColor }}
+                              >
+                                {categoryLabel}
+                              </div>
+                            ) : null}
+
+                            {showActionRow && (
+                              <div className="flex gap-2 mt-3 pt-3 border-t dark:border-gray-700">
+                                <button
+                                  className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                  onClick={() => fileInputRef.current?.click()}
+                                  aria-label="Прикрепить чек"
+                                >
+                                  <Camera className="w-5 h-5 text-[#2D9A86]" />
+                                  <span className="text-xs text-gray-600 dark:text-gray-400">Прикрепить чек</span>
+                                </button>
+                                <button
+                                  className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                  aria-label="Выбрать тег"
+                                >
+                                  <Tag className="w-5 h-5 text-[#2D9A86]" />
+                                  <span className="text-xs text-gray-600 dark:text-gray-400">Выбрать тег</span>
+                                </button>
+                                <button
+                                  className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                  onClick={() => {
+                                    const hint = `Добавьте комментарий к транзакции ${t.transactionId}: `;
+                                    setMessage((prev) => (prev ? prev : hint));
+                                  }}
+                                  aria-label="Комментарий"
+                                >
+                                  <MessageCircle className="w-5 h-5 text-[#2D9A86]" />
+                                  <span className="text-xs text-gray-600 dark:text-gray-400">Комментарий</span>
+                                </button>
+                              </div>
+                            )}
+
+                            {!showActionRow && !hasCategory && (
+                              <button
+                                onClick={() => setSelectedTransaction(t.transactionId)}
+                                className="w-full mt-3 pt-3 border-t dark:border-gray-700 text-center text-sm text-[#2D9A86] hover:text-[#268976]"
+                              >
+                                Добавить категорию
+                              </button>
+                            )}
+                            {showActionRow && (
+                              <button
+                                onClick={() => setSelectedTransaction(null)}
+                                className="w-full mt-3 pt-3 border-t dark:border-gray-700 text-center text-sm text-[#2D9A86] hover:text-[#268976]"
+                              >
+                                Скрыть действия
+                              </button>
+                            )}
                           </div>
-                          {hasCategory ? (
-                            <div
-                              className={`mt-2 inline-block px-3 py-1 rounded-full text-xs ${categoryTextClass}`}
-                              style={{ backgroundColor: accentColor }}
-                            >
-                              {t.category}
-                            </div>
-                          ) : null}
-
-                          {/* Quick actions row */}
-                          {showActionRow && (
-                            <div className="flex gap-2 mt-3 pt-3 border-t dark:border-gray-700">
-                              <button
-                                className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                                onClick={() => fileInputRef.current?.click()}
-                                aria-label="Прикрепить чек"
-                              >
-                                <Camera className="w-5 h-5 text-[#2D9A86]" />
-                                <span className="text-xs text-gray-600 dark:text-gray-400">Прикрепить чек</span>
-                              </button>
-                              <button
-                                className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                                aria-label="Выбрать тег"
-                              >
-                                <Tag className="w-5 h-5 text-[#2D9A86]" />
-                                <span className="text-xs text-gray-600 dark:text-gray-400">Выбрать тег</span>
-                              </button>
-                              <button
-                                className="flex-1 flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                                onClick={() => {
-                                  const hint = `Добавьте комментарий к транзакции ${t.transactionId}: `;
-                                  setMessage((prev) => (prev ? prev : hint));
-                                }}
-                                aria-label="Комментарий"
-                              >
-                                <MessageCircle className="w-5 h-5 text-[#2D9A86]" />
-                                <span className="text-xs text-gray-600 dark:text-gray-400">Комментарий</span>
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Toggle actions CTA */}
-                          {!showActionRow && !hasCategory && (
-                            <button
-                              onClick={() => setSelectedTransaction(t.transactionId)}
-                              className="w-full mt-3 pt-3 border-t dark:border-gray-700 text-center text-sm text-[#2D9A86] hover:text-[#268976]"
-                            >
-                              Добавить категорию
-                            </button>
-                          )}
-                          {showActionRow && (
-                            <button
-                              onClick={() => setSelectedTransaction(null)}
-                              className="w-full mt-3 pt-3 border-t dark:border-gray-700 text-center text-sm text-[#2D9A86] hover:text-[#268976]"
-                            >
-                              Скрыть действия
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Show messages after transactions */}
-                {messages.map((msg) => {
-                  const isSuccessMessage = msg.id.startsWith('success-');
-                  const isErrorMessage = msg.id.startsWith('error-');
-                  const isProcessingMessage = msg.id.startsWith('processing-');
-
-                  if (isSuccessMessage) {
-                    return (
-                      <div key={msg.id} className="flex justify-start">
-                        <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800">
-                          <p>{msg.text}</p>
-                          <p className="text-xs mt-1 text-green-500 dark:text-green-400">
-                            {msg.timestamp}
-                          </p>
                         </div>
                       </div>
                     );
-                  }
+                  })}
 
-                  if (isProcessingMessage) {
-                    return (
-                      <div key={msg.id} className="flex justify-start">
-                        <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                          <div className="flex items-center gap-2">
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                  {messages.map((msg) => {
+                    const isSuccessMessage = msg.id.startsWith('success-');
+                    const isErrorMessage = msg.id.startsWith('error-');
+                    const isProcessingMessage = msg.id.startsWith('processing-');
+
+                    if (isSuccessMessage) {
+                      return (
+                        <div key={msg.id} className="flex justify-start">
+                          <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800">
                             <p>{msg.text}</p>
+                            <p className="text-xs mt-1 text-green-500 dark:text-green-400">{msg.timestamp}</p>
                           </div>
-                          <p className="text-xs mt-1 text-blue-500 dark:text-blue-400">
-                            {msg.timestamp}
-                          </p>
                         </div>
-                      </div>
-                    );
-                  }
+                      );
+                    }
 
-                  if (isErrorMessage) {
+                    if (isProcessingMessage) {
+                      return (
+                        <div key={msg.id} className="flex justify-start">
+                          <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                            <div className="flex items-center gap-2">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <p>{msg.text}</p>
+                            </div>
+                            <p className="text-xs mt-1 text-blue-500 dark:text-blue-400">{msg.timestamp}</p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (isErrorMessage) {
+                      return (
+                        <div key={msg.id} className="flex justify-start">
+                          <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
+                            <p>{msg.text}</p>
+                            <p className="text-xs mt-1 text-red-500 dark:text-red-400">{msg.timestamp}</p>
+                          </div>
+                        </div>
+                      );
+                    }
+
                     return (
-                      <div key={msg.id} className="flex justify-start">
-                        <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
-                          <p>{msg.text}</p>
-                          <p className="text-xs mt-1 text-red-500 dark:text-red-400">
-                            {msg.timestamp}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                          msg.sender === 'user'
-                            ? 'bg-[#2D9A86] text-white'
-                            : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'
-                        }`}
-                      >
-                        <p>{msg.text}</p>
-                        <p
-                          className={`text-xs mt-1 ${
-                            msg.sender === 'user' ? 'text-white/70' : 'text-gray-500 dark:text-gray-400'
+                      <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                            msg.sender === 'user'
+                              ? 'bg-[#2D9A86] text-white'
+                              : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white'
                           }`}
                         >
-                          {msg.timestamp}
-                        </p>
+                          {renderMessageContent(msg)}
+                          <p
+                            className={`text-xs mt-1 ${
+                              msg.sender === 'user' ? 'text-white/70' : 'text-gray-500 dark:text-gray-400'
+                            }`}
+                          >
+                            {msg.timestamp}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </>
-            ) : (
+                    );
+                  })}
+                </>
+              ) : (
                 <div className="text-center py-12">
                   <div className="w-20 h-20 rounded-full bg-[#EEFE6D] mx-auto mb-4 flex items-center justify-center">
                     <Wallet className="w-10 h-10" />
                   </div>
                   <p className="text-gray-600 dark:text-gray-400">Нет транзакций</p>
                   <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">
-                    Напишите что-то вроде "купил кофе за 500 тенге"
+                    Напишите что-то вроде «купил кофе за 500 тенге»
                   </p>
                 </div>
               )
@@ -1009,10 +1111,10 @@ export function ChatbotTab() {
                       <strong>Как добавить расход:</strong>
                     </p>
                     <p className="text-xs text-blue-600 dark:text-blue-400">
-                      Напишите в естественном формате:<br/>
-                      • "купил кока колу за 450 тенге"<br/>
-                      • "потратил 500 ₸ на кофе"<br/>
-                      • "заплатил за такси 1200 тг"
+                      Напишите в естественном формате:<br />
+                      • «купил кока колу за 450 тенге»<br />
+                      • «потратил 500 ₸ на кофе»<br />
+                      • «заплатил за такси 1200 тг»
                     </p>
                   </div>
                 )}
@@ -1045,7 +1147,6 @@ export function ChatbotTab() {
 
       {/* Composer */}
       <div className="bg-white dark:bg-gray-800 border-t dark:border-gray-700 p-4 flex-shrink-0">
-        {/* status + errors */}
         {error ? (
           <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
             {error}
@@ -1104,7 +1205,11 @@ export function ChatbotTab() {
                 handleSend();
               }
             }}
-            placeholder={selectedChat === 'financial-diary' ? 'Например: "купил кока колу за 450 тенге сегодня" или "потратил 500 ₸ на кофе"' : 'Введите сообщение...'}
+            placeholder={
+              selectedChat === 'financial-diary'
+                ? 'Например: «купил кока колу за 450 тенге сегодня» или «потратил 500 ₸ на кофе»'
+                : 'Введите сообщение...'
+            }
             className="flex-1 dark:bg-gray-700 dark:text-white dark:border-gray-600"
             disabled={disableComposer}
           />

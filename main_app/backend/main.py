@@ -1,8 +1,10 @@
+import csv
 import io
 import os
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Dict
 import math
+import re
 
 import numpy as np
 import pandas as pd
@@ -62,6 +64,85 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
         return 0.0
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+
+def coerce_float(*candidates: object) -> float:
+    """Return the first candidate that can be parsed as a finite float, otherwise 0.0."""
+    for candidate in candidates:
+        if candidate is None:
+            continue
+
+        if isinstance(candidate, (int, float)):
+            value = float(candidate)
+            if math.isfinite(value):
+                return value
+            continue
+
+        if isinstance(candidate, str):
+            stripped = candidate.strip()
+            if not stripped:
+                continue
+
+            sanitized = stripped.replace("\u00a0", "").replace(" ", "")
+            if "," in sanitized:
+                if "." in sanitized:
+                    sanitized = sanitized.replace(",", "")
+                else:
+                    sanitized = sanitized.replace(",", ".")
+
+            try:
+                value = float(sanitized)
+            except ValueError:
+                continue
+
+            if math.isfinite(value):
+                return value
+
+    return 0.0
+
+
+def coerce_int(candidate: object, fallback: int = 0) -> int:
+    """Return an integer parsed from candidate, or fallback if parsing fails."""
+    if isinstance(candidate, int):
+        return candidate
+    if isinstance(candidate, float):
+        return int(candidate) if math.isfinite(candidate) else fallback
+    if isinstance(candidate, str):
+        stripped = candidate.strip()
+        if not stripped:
+            return fallback
+        try:
+            return int(float(stripped.replace("\u00a0", "").replace(" ", "").replace(",", ".")))
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def looks_like_guid(value: object) -> bool:
+    """Heuristic check to see if a value resembles a GUID/UUID."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if len(text) < 8 or text.count("-") < 2:
+        return False
+    return all(part.isalnum() for part in text.split("-"))
+
+
+def read_csv_rows(csv_path: Path, encodings: List[str]) -> List[Dict[str, str]]:
+    """Read CSV rows trying multiple encodings, skipping those with replacement characters."""
+    for encoding in encodings:
+        try:
+            with csv_path.open("r", encoding=encoding) as csvfile:
+                rows = list(csv.DictReader(csvfile))
+        except UnicodeDecodeError:
+            continue
+
+        if rows and encoding != encodings[-1]:
+            has_replacement = any("\ufffd" in (value or "") for row in rows for value in row.values())
+            if has_replacement:
+                continue
+        return rows
+    return []
 
 # Build a simple in-memory "vector store" for each CSV.
 # Each store: list of dicts with keys: "id", "text", "metadata", "embedding"
@@ -182,8 +263,18 @@ class ChatRequest(BaseModel):
     history: List[ChatHistoryTurn] = Field(default_factory=list)
 
 
+class CitationInfo(BaseModel):
+    id: Optional[str] = None
+    source: str = "knowledge"
+    chapter: Optional[str] = None
+    topic: Optional[str] = None
+    explanation: Optional[str] = None
+    type: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     response: str
+    citations: List[CitationInfo] = Field(default_factory=list)
 
 
 class TranscriptionResponse(BaseModel):
@@ -257,7 +348,75 @@ def format_retrieved_for_prompt(retrieved: Dict[str, List[Dict]]) -> str:
             parts.append(f"{r['text']}\n({meta_summary})")
     return "\n\n".join(parts)
 
-def build_chat_messages(request: ChatRequest) -> List[dict]:
+
+def coerce_optional_str(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower() == "nan":
+        return None
+    return text
+
+
+KNOWLEDGE_CHAPTER_KEYS = ["глава", "\ufeffглава", "chapter", "Chapter", "Глава"]
+KNOWLEDGE_TOPIC_KEYS = [
+    "общий вопрос/тема",
+    "общий вопрос / тема",
+    "вопрос/тема",
+    "вопрос / тема",
+    "тема",
+    "question",
+]
+KNOWLEDGE_EXPLANATION_KEYS = [
+    "ответ/объяснение",
+    "ответ/обьяснение",
+    "объяснение",
+    "ответ",
+    "explanation",
+    "answer",
+]
+KNOWLEDGE_TYPE_KEYS = ["тип", "type"]
+KNOWLEDGE_ID_KEYS = ["id", "ID", "row_id", "rowId"]
+
+
+def build_citations_payload(retrieved: Dict[str, List[Dict]]) -> List[CitationInfo]:
+    citations: List[CitationInfo] = []
+    seen: set[str] = set()
+    knowledge_rows = retrieved.get("knowledge") or []
+
+    for row in knowledge_rows:
+        metadata = row.get("metadata") or {}
+        chapter = next((coerce_optional_str(metadata.get(key)) for key in KNOWLEDGE_CHAPTER_KEYS if key in metadata), None)
+        topic = next((coerce_optional_str(metadata.get(key)) for key in KNOWLEDGE_TOPIC_KEYS if key in metadata), None)
+        explanation = next(
+            (coerce_optional_str(metadata.get(key)) for key in KNOWLEDGE_EXPLANATION_KEYS if key in metadata),
+            None,
+        )
+        record_type = next((coerce_optional_str(metadata.get(key)) for key in KNOWLEDGE_TYPE_KEYS if key in metadata), None)
+        record_id = next((coerce_optional_str(metadata.get(key)) for key in KNOWLEDGE_ID_KEYS if key in metadata), None)
+
+        dedupe_key = chapter or record_id or coerce_optional_str(row.get("id"))
+        if not dedupe_key or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        citations.append(
+            CitationInfo(
+                id=record_id or coerce_optional_str(row.get("id")),
+                source="knowledge",
+                chapter=chapter,
+                topic=topic,
+                explanation=explanation,
+                type=record_type,
+            )
+        )
+
+    return citations
+
+
+def build_chat_messages(request: ChatRequest) -> Tuple[List[dict], Dict[str, List[Dict]]]:
     messages: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     # add history
@@ -267,7 +426,7 @@ def build_chat_messages(request: ChatRequest) -> List[dict]:
         messages.append({"role": turn.role, "content": turn.content})
 
     if not request.message.strip():
-        return messages
+        return messages, {}
 
     # Decide which CSVs to consult for retrieval
     sources = select_data_sources_for_query(request.message)
@@ -296,7 +455,7 @@ def build_chat_messages(request: ChatRequest) -> List[dict]:
 
     # Finally append user's message
     messages.append({"role": "user", "content": request.message})
-    return messages
+    return messages, retrieved
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -304,13 +463,15 @@ def chat(request: ChatRequest, _settings: Settings = Depends(get_settings)) -> C
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
+    messages, retrieved = build_chat_messages(request)
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=build_chat_messages(request),
+        messages=messages,
         temperature=0.3,
     )
     reply = completion.choices[0].message.content.strip()
-    return ChatResponse(response=reply)
+    citations = build_citations_payload(retrieved)
+    return ChatResponse(response=reply, citations=citations)
 
 
 @app.post("/transcribe", response_model=TranscriptionResponse)
@@ -506,31 +667,50 @@ def merge_transactions() -> List[dict]:
     if not TRANSACTIONS_CSV.exists():
         return []
 
-    with TRANSACTIONS_CSV.open("r", encoding="utf-8") as csvfile:
+    with TRANSACTIONS_CSV.open("r", encoding="utf-8-sig") as csvfile:
         transaction_rows = list(csv.DictReader(csvfile))
 
-    finance_rows = []
+    finance_rows: List[Dict[str, str]] = []
     if FINANCES_CSV.exists():
-        with FINANCES_CSV.open("r", encoding="utf-8") as csvfile:
-            finance_rows = list(csv.DictReader(csvfile))
+        finance_rows = read_csv_rows(FINANCES_CSV, ["utf-8-sig", "cp1251", "utf-8"])
 
-    finance_lookup = {row["transaction_id"]: row for row in finance_rows}
+    finance_lookup: Dict[str, Dict[str, str]] = {}
+    for row in finance_rows:
+        key = str(row.get("transaction_id") or "").strip()
+        if key:
+            finance_lookup[key] = row
 
     merged: List[dict] = []
     for row in transaction_rows:
-        finance = finance_lookup.get(row["transaction_id"], {})
+        amount_field = row.get("amount")
+        transaction_id_field = row.get("transaction_id")
+
+        if looks_like_guid(amount_field) and not looks_like_guid(transaction_id_field):
+            row["transaction_id"], row["amount"] = str(amount_field).strip(), transaction_id_field
+
+        transaction_id = str(row.get("transaction_id") or "").strip()
+        finance = finance_lookup.get(transaction_id, {})
+
+        amount_value = coerce_float(row.get("amount"), finance.get("amount_money"))
+        amount_money_value = coerce_float(finance.get("amount_money"), row.get("amount"))
+
+        quantity_source = finance.get("pcs") if finance else None
+        if not quantity_source:
+            quantity_source = row.get("pcs")
+        quantity_value = max(coerce_int(quantity_source, fallback=1), 1)
+
         merged.append(
             {
-                "transaction_id": row["transaction_id"],
-                "date": row["date"],
-                "time": row["time"],
-                "amount": float(row.get("amount", 0) or 0),
-                "transactioner_id": row.get("transactioner_id", ""),
+                "transaction_id": transaction_id,
+                "date": row.get("date", ""),
+                "time": row.get("time", ""),
+                "amount": amount_value,
+                "transactioner_id": row.get("transactioner_id", "") or "",
                 "category": finance.get("category", "Other"),
-                "category_ru": finance.get("category_ru", "Прочее"),
-                "amount_money": float(finance.get("amount_money") or row.get("amount") or 0),
-                "item": finance.get("item", "Unknown item"),
-                "pcs": int(finance.get("pcs") or 1),
+                "category_ru": finance.get("category_ru") or "Прочее",
+                "amount_money": amount_money_value,
+                "item": finance.get("item", "Unknown item") or "Unknown item",
+                "pcs": quantity_value,
             }
         )
     return merged
@@ -568,7 +748,7 @@ if __name__ == "__main__":
     test_request = ChatRequest(message=user_query, history=[])
 
     # Build messages including retrieval
-    messages = build_chat_messages(test_request)
+    messages, retrieved = build_chat_messages(test_request)
 
     # Print system messages (context + retrieved rows)
     print("=== SYSTEM CONTEXT + RETRIEVED CSV ROWS ===\n")
@@ -581,10 +761,7 @@ if __name__ == "__main__":
     print("\nGenerating response with LLM...\n")
 
     try:
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages
-        )
+        completion = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
         response = completion.choices[0].message.content
         print("💬 ZamanAI:", response)
     except Exception as e:
