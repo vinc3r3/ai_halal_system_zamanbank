@@ -1,7 +1,7 @@
 
   # Website with Chatbot and Finances
 
-  This is a code bundle for Website with Chatbot and Finances. The original project is available at https://www.figma.com/design/je1V0wcta6EoumDDgBhVeU/Website-with-Chatbot-and-Finances.
+
 
   ## Running the code
 
