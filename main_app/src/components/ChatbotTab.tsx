@@ -245,6 +245,7 @@ export function ChatbotTab() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [isExtractingReceipt, setIsExtractingReceipt] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isParsingText, setIsParsingText] = useState(false);
@@ -693,9 +694,129 @@ export function ChatbotTab() {
     setError(null);
     fileInputRef.current?.click();
   };
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) console.log('File selected:', file);
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const files = Array.from(fileList);
+    if (selectedChat !== 'financial-diary') {
+      setError('Receipt upload is available inside the financial diary.');
+      e.target.value = '';
+      return;
+    }
+
+    const supported = /\.(pdf|png|jpe?g|tiff?|heic)$/i;
+    const validFiles = files.filter((file) => supported.test(file.name.toLowerCase()));
+    if (validFiles.length === 0) {
+      setError('Supported formats: PDF, PNG, JPG, JPEG, TIFF, HEIC.');
+      e.target.value = '';
+      return;
+    }
+
+    setError(null);
+    setIsExtractingReceipt(true);
+
+    const processingMessage: Message = {
+      id: `receipt-processing-${Date.now()}`,
+      text: 'Processing receipt photo...',
+      sender: 'ai',
+      timestamp: formatTimestamp(),
+    };
+
+    if (isMountedRef.current) {
+      setMessages((prev) => [...prev, processingMessage]);
+      setTimeout(scrollToBottom, 200);
+    }
+
+    const formData = new FormData();
+    validFiles.forEach((file) => formData.append('files', file));
+    formData.append('prefer_ru', 'true');
+    formData.append('mode', 'MULTIMODAL');
+    formData.append('agent_name', 'receipt-extractor');
+    formData.append('reuse', 'true');
+    formData.append('save_to_diary', 'true');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/receipt/extract`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const contentType = response.headers.get('content-type') ?? '';
+      let payload: any = null;
+      if (contentType.includes('application/json')) {
+        payload = await response.json();
+      } else {
+        const textBody = await response.text();
+        payload = textBody;
+      }
+
+      if (!response.ok) {
+        const detail =
+          typeof payload === 'string'
+            ? payload
+            : typeof payload?.detail === 'string'
+              ? payload.detail
+              : 'Failed to process receipt.';
+        throw new Error(detail || 'Failed to process receipt.');
+      }
+
+      const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+      const savedCount = entries.length;
+
+      if (isMountedRef.current) {
+        if (savedCount > 0) {
+          const summaryMessage: Message = {
+            id: `receipt-success-${Date.now()}`,
+            text: `Added ${savedCount} ${savedCount === 1 ? 'transaction' : 'transactions'} from ${validFiles.length === 1 ? validFiles[0].name : 'receipts'}.`,
+            sender: 'ai',
+            timestamp: formatTimestamp(),
+          };
+          setMessages((prev) => [...prev, summaryMessage]);
+          setTimeout(scrollToBottom, 200);
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `receipt-empty-${Date.now()}`,
+              text: 'No transactions were detected in the uploaded receipt.',
+              sender: 'ai',
+              timestamp: formatTimestamp(),
+            },
+          ]);
+          setTimeout(scrollToBottom, 200);
+        }
+      }
+
+      if (savedCount > 0) {
+        await loadTransactions();
+      }
+
+      if (Array.isArray(payload?.errors) && payload.errors.length && isMountedRef.current) {
+        setError(payload.errors.join('; '));
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `receipt-error-${Date.now()}`,
+            text: 'Receipt processing failed.',
+            sender: 'ai',
+            timestamp: formatTimestamp(),
+          },
+        ]);
+        setTimeout(scrollToBottom, 200);
+        setError(err instanceof Error ? err.message : GENERAL_ERROR);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsExtractingReceipt(false);
+        setMessages((prev) => prev.filter((msg) => msg.id !== processingMessage.id));
+      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      e.target.value = '';
+    }
   };
 
   // -------- mic / STT --------
@@ -809,6 +930,7 @@ export function ChatbotTab() {
 
   // -------- UI status text --------
   const statusText = (() => {
+    if (isExtractingReceipt) return 'Processing receipt photo...';
     if (isTranscribing) return 'Преобразуем запись в текст...';
     if (isProcessing) return 'Zaman AI готовит ответ...';
     if (isGeneratingAudio) return 'Готовим аудиоответ...';
@@ -874,7 +996,7 @@ export function ChatbotTab() {
   // ---------- Active chat screen ----------
   const currentChat = chatOptions.find((o) => o.id === selectedChat);
   const canReplayAudio = messages.some((m) => m.sender === 'ai');
-  const disableComposer = isProcessing || isTranscribing || isParsingText;
+  const disableComposer = isProcessing || isTranscribing || isParsingText || isExtractingReceipt;
 
   return (
     <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">

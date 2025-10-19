@@ -23,6 +23,7 @@ The chatbot logic and audio features now live in a Python FastAPI service under 
    set OPENAI_BASE_URL=https://openai-hub.neuraldeep.tech/v1
    ```
    Adjust `OPENAI_BASE_URL` if you are using a different gateway. `BACKEND_CORS_ORIGINS` can be set to a comma-separated list of origins if you need to tighten CORS (defaults to `*`).
+   For receipt photo parsing inside the financial diary, also set `LLAMA_CLOUD_API_KEY` (and optionally `AGENT_NAME`, `MODE`, `PREFER_RU`). The key stays on the server.
 3. Start the service:
    ```bash
    uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload

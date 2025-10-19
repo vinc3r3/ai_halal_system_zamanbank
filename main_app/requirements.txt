@@ -1,9 +1,12 @@
 fastapi
 gTTS
+llama-cloud
+llama-cloud-services
 numpy
 openai
 pandas
 pyper; platform_system == "Darwin"
+python-dotenv
 python-multipart
 sounddevice
 streamlit
