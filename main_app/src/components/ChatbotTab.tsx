@@ -73,8 +73,15 @@ const chatOptions: ChatOption[] = [
 ];
 
 // ---------- ENV / helpers ----------
+const resolveDefaultApiBase = (): string => {
+  if (typeof window === 'undefined') return 'http://localhost:8000';
+  const { protocol, hostname } = window.location;
+  const port = 8000;
+  return `${protocol}//${hostname}:${port}`;
+};
+
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'http://localhost:8000';
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? resolveDefaultApiBase();
 
 const TIMESTAMP_LOCALE: Intl.LocalesArgument = 'ru-RU';
 const formatTimestamp = () =>
@@ -427,7 +434,7 @@ export function ChatbotTab() {
         })
         .filter(Boolean) as DiaryTransaction[];
 
-      mapped.sort((a, b) => parseTimestamp(b.date, b.time) - parseTimestamp(a.date, a.time));
+      mapped.sort((a, b) => parseTimestamp(a.date, a.time) - parseTimestamp(b.date, b.time));
       createCategoryColorLookup(mapped.map((tx) => tx.category ?? '').filter(Boolean));
 
       if (isMountedRef.current) {

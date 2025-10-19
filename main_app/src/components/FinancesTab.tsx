@@ -6,8 +6,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { createCategoryColorLookup, formatCurrency, getCategoryColor } from "../data/financialData";
 
+const resolveDefaultApiBase = (): string => {
+  if (typeof window === "undefined") return "http://localhost:8000";
+  const { protocol, hostname } = window.location;
+  const port = 8000;
+  return `${protocol}//${hostname}:${port}`;
+};
+
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "http://localhost:8000";
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? resolveDefaultApiBase();
 
 const parseAmount = (value: unknown): number => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
