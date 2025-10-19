@@ -1,10 +1,15 @@
 import csv
 import io
-import os
-from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Dict
 import math
+import os
 import re
+import tempfile
+import threading
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -14,6 +19,18 @@ from fastapi.responses import StreamingResponse
 from gtts import gTTS
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
+try:  # pragma: no cover - optional dependency
+    from llama_cloud import ChunkMode, ExtractConfig, ExtractMode, ExtractTarget
+    from llama_cloud.core.api_error import ApiError
+    from llama_cloud_services import LlamaExtract
+except ImportError:  # pragma: no cover - handled at runtime
+    ChunkMode = ExtractConfig = ExtractMode = ExtractTarget = None  # type: ignore[assignment]
+
+    class ApiError(Exception):  # type: ignore[no-redef]
+        """Fallback ApiError when llama-cloud SDK is missing."""
+
+    LlamaExtract = None  # type: ignore[assignment]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -297,6 +314,131 @@ class ParsedTransaction(BaseModel):
 
 class TextParseRequest(BaseModel):
     text: str
+
+
+class ReceiptLineItem(BaseModel):
+    item: str
+    pcs: float = 1
+    amount_money: float
+    category: str
+    category_ru: str
+    amount_money_per_pc: Optional[float] = None
+
+
+class ReceiptPayload(BaseModel):
+    transaction_id: str
+    items: List[ReceiptLineItem]
+
+
+class StoredTransaction(BaseModel):
+    transaction_id: str
+    date: str
+    time: str
+    transactioner_id: str
+    amount: float
+    amount_money: float
+    item: str
+    category: str
+    category_ru: str
+    pcs: int
+
+
+class ReceiptUploadResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    transactions: List[StoredTransaction] = Field(default_factory=list)
+
+
+RECEIPT_ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+_receipt_runtime: Optional[Tuple[object, object]] = None
+_receipt_runtime_lock = threading.Lock()
+RECEIPT_AGENT_NAME = os.getenv("LLAMA_CLOUD_AGENT_NAME", "receipt-extractor")
+RECEIPT_SYSTEM_PROMPT = (
+    "Documents are retail purchase receipts. "
+    "Languages: Russian and English. "
+    "Goal: fill the schema exactly. "
+    "Infer categories. Use pcs=1 if quantity not shown. "
+    "Use dot for decimals. Do not include currency symbols. "
+    "Prefer Russian item names when present."
+)
+
+
+def ensure_receipt_runtime() -> Tuple[object, object]:
+    """
+    Lazily initialize a LlamaExtract agent that matches the CLI receipt extractor.
+    """
+    global _receipt_runtime
+
+    if _receipt_runtime is not None:
+        return _receipt_runtime
+
+    if (
+        LlamaExtract is None
+        or ExtractConfig is None
+        or ExtractMode is None
+        or ExtractTarget is None
+        or ChunkMode is None
+    ):
+        raise RuntimeError(
+            "Receipt extraction dependencies are not installed. "
+            "Install the optional requirements in main_app/receipt_processing/requirements.txt to enable this feature."
+        )
+
+    api_key = os.getenv("LLAMA_CLOUD_API_KEY")
+    if not api_key:
+        raise RuntimeError("LLAMA_CLOUD_API_KEY is not configured for receipt extraction")
+
+    reuse_agent_env = os.getenv("LLAMA_CLOUD_REUSE_AGENT", "1").lower()
+    reuse_agent = reuse_agent_env not in {"0", "false", "no"}
+
+    with _receipt_runtime_lock:
+        if _receipt_runtime is not None:
+            return _receipt_runtime
+
+        extractor = LlamaExtract()
+        config = ExtractConfig(
+            extraction_mode=ExtractMode.MULTIMODAL,
+            extraction_target=ExtractTarget.PER_DOC,
+            chunk_mode=ChunkMode.PAGE,
+            high_resolution_mode=True,
+            system_prompt=RECEIPT_SYSTEM_PROMPT,
+        )
+
+        agent_name = RECEIPT_AGENT_NAME
+
+        def unique_agent_name(base: str) -> str:
+            return f"{base}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+
+        try:
+            agent = extractor.create_agent(
+                name=agent_name,
+                data_schema=ReceiptPayload,
+                config=config,
+            )
+        except ApiError as exc:
+            if getattr(exc, "status_code", None) == 409:
+                if reuse_agent:
+                    agent = extractor.get_agent_by_name(name=agent_name)
+                else:
+                    agent = extractor.create_agent(
+                        name=unique_agent_name(agent_name),
+                        data_schema=ReceiptPayload,
+                        config=config,
+                    )
+            else:
+                raise
+
+        _receipt_runtime = (extractor, agent)
+        return _receipt_runtime
+
+
+def extract_receipt(file_path: Path) -> ReceiptPayload:
+    extractor, agent = ensure_receipt_runtime()
+    result = agent.extract(str(file_path))
+    data = getattr(result, "data", None)
+    if not data:
+        raise ValueError("Receipt extractor returned no data")
+    return ReceiptPayload.model_validate(data)
 
 
 app = FastAPI(title="ZamanAI Backend", version="0.2.0")
@@ -585,11 +727,17 @@ def parse_text(request: TextParseRequest) -> ParsedTransaction:
     return parse_financial_text(request.text)
 
 
-def append_transaction_to_csv(amount: float, item: str, category: str, category_ru: str, pcs: int) -> str:
+def append_transaction_to_csv(amount: float, item: str, category: str, category_ru: str, pcs: int) -> StoredTransaction:
+    normalized_item = (item or "Unknown item").strip() or "Unknown item"
+    normalized_category = (category or "Other").strip() or "Other"
+    normalized_category_ru = (category_ru or "��祥").strip() or "��祥"
+    pcs_value = max(int(pcs or 1), 1)
+
     transaction_id = str(uuid.uuid4())
     now = datetime.now()
     date_str = now.strftime("%m/%d/%Y")
     time_str = now.strftime("%H:%M:%S")
+    transactioner_id = f"CUST-{now.strftime('%Y%m%d%H%M%S')}"
 
     ensure_csv_headers(
         TRANSACTIONS_CSV,
@@ -611,7 +759,7 @@ def append_transaction_to_csv(amount: float, item: str, category: str, category_
                 "time": time_str,
                 "amount": amount,
                 "transaction_id": transaction_id,
-                "transactioner_id": f"CUST-{now.strftime('%Y%m%d%H%M%S')}",
+                "transactioner_id": transactioner_id,
             }
         )
 
@@ -630,15 +778,26 @@ def append_transaction_to_csv(amount: float, item: str, category: str, category_
         writer.writerow(
             {
                 "transaction_id": transaction_id,
-                "category": category,
+                "category": normalized_category,
                 "amount_money": amount,
-                "item": item or "Unknown item",
-                "pcs": pcs,
-                "category_ru": category_ru,
+                "item": normalized_item,
+                "pcs": pcs_value,
+                "category_ru": normalized_category_ru,
             }
         )
 
-    return transaction_id
+    return StoredTransaction(
+        transaction_id=transaction_id,
+        date=date_str,
+        time=time_str,
+        transactioner_id=transactioner_id,
+        amount=amount,
+        amount_money=amount,
+        item=normalized_item,
+        category=normalized_category,
+        category_ru=normalized_category_ru,
+        pcs=pcs_value,
+    )
 
 
 @app.post("/save-transaction")
@@ -653,14 +812,97 @@ def save_transaction(transaction_data: dict) -> dict:
         if amount <= 0:
             raise ValueError("Amount must be greater than zero.")
 
-        transaction_id = append_transaction_to_csv(amount, item, category, category_ru, pcs)
+        record = append_transaction_to_csv(amount, item, category, category_ru, pcs)
         return {
             "success": True,
             "message": "Transaction saved successfully",
-            "transaction_id": transaction_id,
+            "transaction_id": record.transaction_id,
+            "transaction": record.model_dump(),
         }
     except Exception as exc:
         return {"success": False, "message": f"Error saving transaction: {exc}"}
+
+
+@app.post("/upload-receipt", response_model=ReceiptUploadResponse)
+async def upload_receipt(file: UploadFile = File(...)) -> ReceiptUploadResponse:
+    filename = file.filename or "receipt"
+    extension = Path(filename).suffix.lower()
+    if extension not in RECEIPT_ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported file type for receipts")
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        ensure_receipt_runtime()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to initialize receipt extractor: {exc}") from exc
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+
+        try:
+            receipt = extract_receipt(tmp_path)
+        except ApiError as exc:
+            raise HTTPException(status_code=502, detail=f"Receipt extraction failed: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not parse receipt: {exc}") from exc
+
+        created: List[StoredTransaction] = []
+        errors: List[str] = []
+
+        for line in receipt.items:
+            try:
+                amount_value = float(line.amount_money or 0.0)
+            except (TypeError, ValueError):
+                amount_value = 0.0
+
+            if amount_value <= 0:
+                errors.append(f"Skipped line with non-positive amount: {line.item!r}")
+                continue
+
+            try:
+                pcs_value = int(line.pcs or 1)
+            except (TypeError, ValueError):
+                pcs_value = 1
+
+            try:
+                record = append_transaction_to_csv(
+                    amount=amount_value,
+                    item=line.item,
+                    category=line.category,
+                    category_ru=line.category_ru,
+                    pcs=pcs_value,
+                )
+                created.append(record)
+            except Exception as exc:
+                errors.append(f"Failed to save {line.item!r}: {exc}")
+
+        if not created:
+            detail = "; ".join(errors) if errors else "Receipt did not contain valid line items"
+            raise HTTPException(status_code=422, detail=detail)
+
+        message = None
+        if errors:
+            message = "; ".join(errors)
+
+        return ReceiptUploadResponse(
+            success=True,
+            message=message,
+            transactions=created,
+        )
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def merge_transactions() -> List[dict]:

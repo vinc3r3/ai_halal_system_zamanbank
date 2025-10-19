@@ -238,11 +238,12 @@ export function ChatbotTab() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isParsingText, setIsParsingText] = useState(false);
   const [transactions, setTransactions] = useState<DiaryTransaction[]>([]);
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement>(null);
@@ -256,11 +257,8 @@ export function ChatbotTab() {
 
   // Function to scroll to bottom
   const scrollToBottom = () => {
-    if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null;
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
+    if (scrollViewportRef.current) {
+      scrollViewportRef.current.scrollTop = scrollViewportRef.current.scrollHeight;
     }
   };
 
@@ -390,6 +388,32 @@ export function ChatbotTab() {
   }, [selectedChat, transactions]);
 
   // Load parsed transactions from backend
+  const mapRawTransaction = (raw: any): DiaryTransaction | null => {
+    const transactionId = normalizeText(raw?.transaction_id) ?? '';
+    if (!transactionId) return null;
+
+    const item = normalizeText(raw?.item);
+    const category = normalizeText(raw?.category);
+    const categoryRu = normalizeText(raw?.category_ru);
+    const date = normalizeText(raw?.date) ?? '';
+    const time = normalizeText(raw?.time) ?? '';
+    const customerId = normalizeText(raw?.transactioner_id);
+    const amount = toNumber(raw?.amount_money ?? raw?.amount);
+    const quantity = toQuantity(raw?.pcs ?? raw?.quantity);
+
+    return {
+      transactionId,
+      item,
+      amount,
+      category,
+      categoryRu,
+      date,
+      time,
+      customerId,
+      quantity,
+    };
+  };
+
   const loadTransactions = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/get-parsed-transactions`);
@@ -400,34 +424,10 @@ export function ChatbotTab() {
 
       const payload = await response.json();
       const mapped: DiaryTransaction[] = (payload?.transactions ?? [])
-        .map((raw: any) => {
-          const transactionId = normalizeText(raw?.transaction_id) ?? '';
-          if (!transactionId) return null;
-
-          const item = normalizeText(raw?.item);
-          const category = normalizeText(raw?.category);
-          const categoryRu = normalizeText(raw?.category_ru);
-          const date = normalizeText(raw?.date) ?? '';
-          const time = normalizeText(raw?.time) ?? '';
-          const customerId = normalizeText(raw?.transactioner_id);
-          const amount = toNumber(raw?.amount_money ?? raw?.amount);
-          const quantity = toQuantity(raw?.pcs ?? raw?.quantity);
-
-          return {
-            transactionId,
-            item,
-            amount,
-            category,
-            categoryRu,
-            date,
-            time,
-            customerId,
-            quantity,
-          } as DiaryTransaction;
-        })
+        .map(mapRawTransaction)
         .filter(Boolean) as DiaryTransaction[];
 
-      mapped.sort((a, b) => parseTimestamp(b.date, b.time) - parseTimestamp(a.date, a.time));
+      mapped.sort((a, b) => parseTimestamp(a.date, a.time) - parseTimestamp(b.date, b.time));
       createCategoryColorLookup(mapped.map((tx) => tx.category ?? '').filter(Boolean));
 
       if (isMountedRef.current) {
@@ -636,7 +636,7 @@ export function ChatbotTab() {
 
           if (saveResponse.ok) {
             await saveResponse.json();
-            setTransactions((prev) => [newTransaction, ...prev]); // ✅ fixed: use setTransactions
+            setTransactions((prev) => [...prev, newTransaction]); // append so newest sits at the bottom
             setTimeout(scrollToBottom, 200);
           } else {
             throw new Error('Failed to save transaction');
@@ -686,9 +686,76 @@ export function ChatbotTab() {
     setError(null);
     fileInputRef.current?.click();
   };
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) console.log('File selected:', file);
+    if (!file) return;
+
+    if (selectedChat !== 'financial-diary') {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setError('Receipt uploads are only available inside the financial diary.');
+      return;
+    }
+
+    setError(null);
+    setIsUploadingReceipt(true);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/upload-receipt`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      let payload: any = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        const detail = payload?.detail ?? payload?.message ?? 'Unable to process receipt.';
+        throw new Error(typeof detail === 'string' ? detail : 'Unable to process receipt.');
+      }
+
+      if (!payload?.success) {
+        const detail = payload?.message ?? 'Receipt was not processed.';
+        throw new Error(typeof detail === 'string' ? detail : 'Receipt was not processed.');
+      }
+
+      const mappedEntries: DiaryTransaction[] = (payload.transactions ?? [])
+        .map(mapRawTransaction)
+        .filter(Boolean) as DiaryTransaction[];
+
+      if (!mappedEntries.length) {
+        throw new Error('Receipt did not return any transactions.');
+      }
+
+      setTransactions((prev) => {
+        const combined = [...prev, ...mappedEntries];
+        combined.sort((a, b) => parseTimestamp(a.date, a.time) - parseTimestamp(b.date, b.time));
+        createCategoryColorLookup(combined.map((entry) => entry.category ?? '').filter(Boolean));
+        return combined;
+      });
+
+      const successMessage: Message = {
+        id: `receipt-${Date.now()}`,
+        text: `Receipt uploaded: ${mappedEntries.length} entr${mappedEntries.length === 1 ? 'y' : 'ies'} added.`,
+        sender: 'ai',
+        timestamp: formatTimestamp(),
+      };
+      setMessages((prev) => [...prev, successMessage]);
+      setTimeout(scrollToBottom, 200);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(err instanceof Error ? err.message : GENERAL_ERROR);
+      }
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (isMountedRef.current) setIsUploadingReceipt(false);
+    }
   };
 
   // -------- mic / STT --------
@@ -802,6 +869,7 @@ export function ChatbotTab() {
 
   // -------- UI status text --------
   const statusText = (() => {
+    if (isUploadingReceipt) return 'Processing receipt...';
     if (isTranscribing) return 'Преобразуем запись в текст...';
     if (isProcessing) return 'Zaman AI готовит ответ...';
     if (isGeneratingAudio) return 'Готовим аудиоответ...';
@@ -867,7 +935,7 @@ export function ChatbotTab() {
   // ---------- Active chat screen ----------
   const currentChat = chatOptions.find((o) => o.id === selectedChat);
   const canReplayAudio = messages.some((m) => m.sender === 'ai');
-  const disableComposer = isProcessing || isTranscribing || isParsingText;
+  const disableComposer = isProcessing || isTranscribing || isParsingText || isUploadingReceipt;
 
   return (
     <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
@@ -919,7 +987,7 @@ export function ChatbotTab() {
 
       {/* Messages / Transactions */}
       <div className="flex-1 overflow-hidden">
-        <ScrollArea ref={scrollAreaRef} className="h-full px-4">
+        <ScrollArea ref={scrollViewportRef} className="h-full px-4">
           <div className="py-4 space-y-4 pb-6">
             {selectedChat === 'financial-diary' ? (
               (transactions.length > 0 || messages.length > 0) ? (
